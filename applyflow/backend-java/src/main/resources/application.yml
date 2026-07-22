@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: applyflow-backend
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:applyflow}}
+    username: ${SPRING_DATASOURCE_USERNAME:${POSTGRES_USER:applyflow}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${POSTGRES_PASSWORD:applyflow}}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

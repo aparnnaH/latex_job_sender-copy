@@ -2,6 +2,12 @@
 
 AI-assisted LaTeX resume tailoring.
 
+## ApplyFlow
+
+The first Java/Spring Boot backend step now lives in `applyflow/`.
+
+See `applyflow/README.md` for setup and test commands.
+
 ## ASP.NET Core API
 
 This repository now includes a separate ASP.NET Core Web API in `api/`.
