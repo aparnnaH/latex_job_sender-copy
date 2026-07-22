@@ -435,7 +435,7 @@ async function downloadApplicationPacketZip(
 }
 
 function tokenizeFilename(filename: string) {
-  return filename.replace(/\.tex$/i, "") || "Aparnna_Hariharan";
+  return filename.replace(/\.tex$/i, "") || "Alex_Morgan";
 }
 
 function normalizeFilenameTag(value: string) {
@@ -1083,12 +1083,12 @@ async function fetchProjectFolderFiles() {
 
 export default function TailorTexApp() {
   const [files, setFiles] = useState<ResumeSourceFile[]>([
-    createResumeSourceFile("Aparnna_Hariharan_resume.tex", sampleLatexResume)
+    createResumeSourceFile("Alex_Morgan_resume.tex", sampleLatexResume)
   ]);
   const [originalFiles, setOriginalFiles] = useState<ResumeSourceFile[]>([
-    createResumeSourceFile("Aparnna_Hariharan_resume.tex", sampleLatexResume)
+    createResumeSourceFile("Alex_Morgan_resume.tex", sampleLatexResume)
   ]);
-  const [activeFileName, setActiveFileName] = useState("Aparnna_Hariharan_resume.tex");
+  const [activeFileName, setActiveFileName] = useState("Alex_Morgan_resume.tex");
   const [previewPdf, setPreviewPdf] = useState<PdfPreview | null>(null);
   const [originalPreviewPdf, setOriginalPreviewPdf] = useState<PdfPreview | null>(null);
   const [compileStatus, setCompileStatus] = useState<{
@@ -2316,7 +2316,7 @@ export default function TailorTexApp() {
   const followUpTemplates = useMemo<GeneratedApplicationAnswer[]>(() => {
     const company = job.company || "your team";
     const role = job.title || "the role";
-    const name = autofillProfile.fullName || "Aparnna";
+    const name = autofillProfile.fullName || "Alex";
     const matchedSkillsText =
       matchAnalysis.matchedSkills.slice(0, 3).join(", ") ||
       jobAnalysis.keywords.slice(0, 3).join(", ") ||
@@ -3387,7 +3387,7 @@ export default function TailorTexApp() {
   }
 
   function loadSampleSingleFile() {
-    const nextFile = createResumeSourceFile("Aparnna_Hariharan_resume.tex", sampleLatexResume);
+    const nextFile = createResumeSourceFile("Alex_Morgan_resume.tex", sampleLatexResume);
     setFiles([nextFile]);
     setOriginalFiles([nextFile]);
     setActiveFileName(nextFile.name);

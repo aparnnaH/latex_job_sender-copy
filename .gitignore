@@ -8,3 +8,4 @@ dist
 data/*.local.json
 data/resumes/
 data/packets/
+resume-project/private-*.tex

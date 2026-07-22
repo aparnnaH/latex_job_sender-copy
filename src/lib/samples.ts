@@ -12,8 +12,8 @@ export const sampleLatexResume = String.raw`\documentclass[letterpaper,10pt]{art
 \begin{document}
 
 \begin{center}
-  {\LARGE Aparnna Hariharan}\\
-  \href{mailto:aparnna@example.com}{aparnna@example.com} $|$ Toronto, ON $|$ github.com/aparnna
+  {\LARGE Alex Morgan}\\
+  \href{mailto:alex.morgan@example.com}{alex.morgan@example.com} $|$ Toronto, ON $|$ github.com/example-user
 \end{center}
 
 \section{Summary}
@@ -72,7 +72,7 @@ export const sampleOverleafFiles = [
     content: String.raw`\documentclass[10pt,a4paper]{altacv}
 
 \begin{document}
-\name{Aparnna Hariharan}
+\name{Alex Morgan}
 \tagline{Software Engineer}
 
 \cvsection{Summary}
