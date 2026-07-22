@@ -1,0 +1,31 @@
+{
+  "schema": "tailortex.localStore",
+  "schemaVersion": 1,
+  "savedAt": "2026-07-16T00:00:00.000Z",
+  "project": {
+    "files": [],
+    "activeFileName": "",
+    "resumeVersionLabel": "",
+    "manualChangeTags": []
+  },
+  "job": {
+    "title": "",
+    "company": "",
+    "url": "",
+    "description": ""
+  },
+  "namedSessions": [],
+  "applicationRecords": [],
+  "autofillProfile": {},
+  "applicationDraft": {
+    "notes": "",
+    "status": "applied"
+  },
+  "editorPreferences": {
+    "maxProjects": 3,
+    "maxCertificates": 3,
+    "priorityKeywords": [],
+    "showEducationEditor": false,
+    "selectedEditorTab": "experience"
+  }
+}

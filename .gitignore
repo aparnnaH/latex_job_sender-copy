@@ -1,0 +1,10 @@
+node_modules
+.next
+out
+dist
+*.log
+.env
+.env.local
+data/*.local.json
+data/resumes/
+data/packets/
