@@ -11,6 +11,27 @@ spring:
     open-in-view: false
   flyway:
     enabled: true
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:applyflow}
+    password: ${RABBITMQ_PASSWORD:applyflow}
+
+applyflow:
+  storage:
+    resumes-dir: ${APPLYFLOW_RESUME_STORAGE_DIR:${java.io.tmpdir}/applyflow/resumes}
+    max-upload-bytes: ${APPLYFLOW_MAX_UPLOAD_BYTES:1048576}
+  tailoring:
+    python-executable: ${PYTHON_EXECUTABLE:python3}
+    python-script-path: ${PYTHON_TAILORING_SCRIPT_PATH:../resume-tailor-python/tailor_resume.py}
+    timeout: ${PYTHON_TAILORING_TIMEOUT:PT60S}
+    max-attempts: ${APPLYFLOW_TAILORING_RETRY_ATTEMPTS:3}
+  rabbitmq:
+    exchange: ${APPLYFLOW_RABBITMQ_EXCHANGE:applyflow.resume-tailoring}
+    queue: ${APPLYFLOW_RABBITMQ_QUEUE:applyflow.resume-tailoring.requests}
+    routing-key: ${APPLYFLOW_RABBITMQ_ROUTING_KEY:resume.tailoring.requested}
+    dead-letter-exchange: ${APPLYFLOW_RABBITMQ_DLX:applyflow.resume-tailoring.dlx}
+    dead-letter-queue: ${APPLYFLOW_RABBITMQ_DLQ:applyflow.resume-tailoring.dead}
 
 management:
   endpoints:

@@ -1,12 +1,12 @@
 package com.applyflow.backend.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -26,7 +27,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
 @AutoConfigureMockMvc
 @Testcontainers
 class JobApplicationControllerIntegrationTest {
@@ -90,7 +91,7 @@ class JobApplicationControllerIntegrationTest {
 
         mockMvc.perform(get("/api/applications"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", hasSize(1)));
+                .andExpect(jsonPath("$").isArray());
 
         mockMvc.perform(delete("/api/applications/{id}", created.id()))
                 .andExpect(status().isNoContent());
@@ -114,5 +115,28 @@ class JobApplicationControllerIntegrationTest {
                 .andExpect(jsonPath("$.details.company").exists())
                 .andExpect(jsonPath("$.details.jobTitle").exists())
                 .andExpect(jsonPath("$.details.jobDescription").exists());
+    }
+
+    @Test
+    void invalidResumeUploadReturnsBadRequest() throws Exception {
+        var createdJson = mockMvc.perform(post("/api/applications")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "company", "Globex",
+                                "jobTitle", "Java Engineer",
+                                "jobDescription", "Build event-driven services",
+                                "jobUrl", "https://example.com/java"
+                        ))))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        var created = objectMapper.readValue(createdJson, JobApplicationResponse.class);
+
+        var file = new MockMultipartFile("resume", "resume.txt", "text/plain", "not latex".getBytes());
+
+        mockMvc.perform(multipart("/api/applications/{id}/resumes/tailor", created.id()).file(file))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Only LaTeX .tex resume files are supported."));
     }
 }

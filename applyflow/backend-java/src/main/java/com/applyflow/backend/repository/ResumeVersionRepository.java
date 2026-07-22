@@ -1,8 +1,28 @@
 package com.applyflow.backend.repository;
 
 import com.applyflow.backend.entity.ResumeVersion;
+import com.applyflow.backend.entity.TailoringStatus;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface ResumeVersionRepository extends JpaRepository<ResumeVersion, UUID> {
+
+    long countByJobApplicationId(UUID jobApplicationId);
+
+    @Modifying
+    @Query("""
+            update ResumeVersion rv
+            set rv.tailoringStatus = :nextStatus,
+                rv.processingStartedAt = CURRENT_TIMESTAMP,
+                rv.attemptCount = rv.attemptCount + 1,
+                rv.failureMessage = null
+            where rv.id = :id and rv.tailoringStatus = :expectedStatus
+            """)
+    int transitionStatus(
+            @Param("id") UUID id,
+            @Param("expectedStatus") TailoringStatus expectedStatus,
+            @Param("nextStatus") TailoringStatus nextStatus);
 }

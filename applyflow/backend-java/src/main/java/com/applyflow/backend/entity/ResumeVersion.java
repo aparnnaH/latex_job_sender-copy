@@ -6,6 +6,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -32,6 +33,9 @@ public class ResumeVersion {
     @Column(nullable = false, length = 2048)
     private String storedFilePath;
 
+    @Column(length = 2048)
+    private String outputFilePath;
+
     @Column(nullable = false)
     private Integer versionNumber;
 
@@ -42,6 +46,19 @@ public class ResumeVersion {
     @Column(nullable = false)
     private OffsetDateTime createdAt;
 
+    @Column(nullable = false)
+    private OffsetDateTime updatedAt;
+
+    @Column(columnDefinition = "text")
+    private String failureMessage;
+
+    @Column(nullable = false)
+    private Integer attemptCount = 0;
+
+    private OffsetDateTime processingStartedAt;
+
+    private OffsetDateTime processingCompletedAt;
+
     @PrePersist
     void onCreate() {
         if (id == null) {
@@ -50,6 +67,13 @@ public class ResumeVersion {
         if (tailoringStatus == null) {
             tailoringStatus = TailoringStatus.PENDING;
         }
-        createdAt = OffsetDateTime.now();
+        var now = OffsetDateTime.now();
+        createdAt = now;
+        updatedAt = now;
+    }
+
+    @PreUpdate
+    void onUpdate() {
+        updatedAt = OffsetDateTime.now();
     }
 }
