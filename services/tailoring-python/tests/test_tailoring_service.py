@@ -87,14 +87,29 @@ class TailoringServiceTests(unittest.TestCase):
             f"--{boundary}\r\n"
             'Content-Disposition: form-data; name="jobDescription"\r\n\r\n'
             f"{job}\r\n"
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="requestId"\r\n\r\n'
+            "11111111-1111-1111-1111-111111111111\r\n"
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="applicationId"\r\n\r\n'
+            "22222222-2222-2222-2222-222222222222\r\n"
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="resumeVersionId"\r\n\r\n'
+            "33333333-3333-3333-3333-333333333333\r\n"
             f"--{boundary}--\r\n"
         ).encode("utf-8")
 
-        response = handle_tailor_multipart(body, f"multipart/form-data; boundary={boundary}")
+        with self.assertLogs("tailoring_service", level="INFO") as logs:
+            response = handle_tailor_multipart(body, f"multipart/form-data; boundary={boundary}")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.payload["report"]["status"], "COMPLETED")
         self.assertEqual(response.payload["tailoredTex"], resume)
+        joined_logs = "\n".join(logs.output)
+        self.assertIn('"requestId": "11111111-1111-1111-1111-111111111111"', joined_logs)
+        self.assertIn('"resumeVersionId": "33333333-3333-3333-3333-333333333333"', joined_logs)
+        self.assertNotIn(resume, joined_logs)
+        self.assertNotIn(job, joined_logs)
 
 
 if __name__ == "__main__":

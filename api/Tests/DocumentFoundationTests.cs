@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 public sealed class DocumentFoundationTests
@@ -44,6 +45,28 @@ public sealed class DocumentFoundationTests
     }
 
     [Fact]
+    public async Task TailorValidationKeepsCorrelationFields()
+    {
+        var requestId = Guid.NewGuid();
+        var applicationId = Guid.NewGuid();
+        var resumeVersionId = Guid.NewGuid();
+        var context = CreateMultipartContext(
+            "resume.tex",
+            "\\documentclass{article}",
+            "Build software.",
+            requestId: requestId,
+            applicationId: applicationId,
+            resumeVersionId: resumeVersionId);
+
+        var result = await DocumentRequestValidator.ValidateTailorFormAsync(context.Request, CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(requestId, result.Command?.RequestId);
+        Assert.Equal(applicationId, result.Command?.ApplicationId);
+        Assert.Equal(resumeVersionId, result.Command?.ResumeVersionId);
+    }
+
+    [Fact]
     public async Task LocalStorageUsesGeneratedDocumentIdsAndSafePaths()
     {
         using var tempRoot = new TempDirectory();
@@ -74,7 +97,12 @@ public sealed class DocumentFoundationTests
     [Fact]
     public async Task HttpPythonClientMapsSuccessfulResponse()
     {
-        var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        var requestId = Guid.NewGuid();
+        var handler = new FakeHttpMessageHandler((_, request) =>
+        {
+            Assert.True(request.Headers.TryGetValues("X-Correlation-ID", out var values));
+            Assert.Contains(requestId.ToString(), values);
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         {
             Content = new StringContent(
                 """
@@ -85,11 +113,12 @@ public sealed class DocumentFoundationTests
                 """,
                 Encoding.UTF8,
                 "application/json")
+        };
         });
         var client = CreatePythonClient(handler);
 
         var result = await client.TailorAsync(
-            new PythonTailoringRequest(Guid.NewGuid(), "\\documentclass{article}", "Python role", null),
+            new PythonTailoringRequest(Guid.NewGuid(), requestId, Guid.NewGuid(), Guid.NewGuid(), "\\documentclass{article}", "Python role", null),
             CancellationToken.None);
 
         Assert.Equal(DocumentStatus.COMPLETED, result.Status);
@@ -120,7 +149,7 @@ public sealed class DocumentFoundationTests
         var client = CreatePythonClient(handler);
 
         var result = await client.TailorAsync(
-            new PythonTailoringRequest(Guid.NewGuid(), "\\documentclass{article}", "Python role", JsonSerializer.SerializeToElement(new { })),
+            new PythonTailoringRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "\\documentclass{article}", "Python role", JsonSerializer.SerializeToElement(new { })),
             CancellationToken.None);
 
         Assert.Equal(DocumentStatus.FAILED, result.Status);
@@ -157,7 +186,7 @@ public sealed class DocumentFoundationTests
         var client = CreatePythonClient(handler, retryAttempts: 1);
 
         var result = await client.TailorAsync(
-            new PythonTailoringRequest(Guid.NewGuid(), "\\documentclass{article}", "Python role", null),
+            new PythonTailoringRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "\\documentclass{article}", "Python role", null),
             CancellationToken.None);
 
         Assert.Equal(DocumentStatus.COMPLETED, result.Status);
@@ -257,7 +286,10 @@ public sealed class DocumentFoundationTests
         string fileName,
         string resumeContent,
         string jobDescription,
-        string evidence = "")
+        string evidence = "",
+        Guid? requestId = null,
+        Guid? applicationId = null,
+        Guid? resumeVersionId = null)
     {
         var services = new ServiceCollection()
             .AddSingleton<IConfiguration>(
@@ -278,7 +310,10 @@ public sealed class DocumentFoundationTests
             new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
             {
                 ["jobDescription"] = jobDescription,
-                ["evidence"] = evidence
+                ["evidence"] = evidence,
+                ["requestId"] = requestId?.ToString() ?? "",
+                ["applicationId"] = applicationId?.ToString() ?? "",
+                ["resumeVersionId"] = resumeVersionId?.ToString() ?? ""
             },
             new FormFileCollection { file });
 
@@ -307,7 +342,7 @@ public sealed class DocumentFoundationTests
             })
             .Build();
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://python-service.test") };
-        return new HttpPythonTailoringClient(httpClient, configuration);
+        return new HttpPythonTailoringClient(httpClient, configuration, NullLogger<HttpPythonTailoringClient>.Instance);
     }
 
     private static TectonicCompiler CreateCompiler(LocalFileDocumentStorage storage, ICompilerProcessRunner runner)
@@ -343,11 +378,16 @@ public sealed class DocumentFoundationTests
 
     private sealed class FakeHttpMessageHandler : HttpMessageHandler
     {
-        private readonly Func<int, HttpResponseMessage> _handler;
+        private readonly Func<int, HttpRequestMessage, HttpResponseMessage> _handler;
 
         public int Calls { get; private set; }
 
         public FakeHttpMessageHandler(Func<int, HttpResponseMessage> handler)
+            : this((call, _) => handler(call))
+        {
+        }
+
+        public FakeHttpMessageHandler(Func<int, HttpRequestMessage, HttpResponseMessage> handler)
         {
             _handler = handler;
         }
@@ -355,7 +395,7 @@ public sealed class DocumentFoundationTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Calls += 1;
-            return Task.FromResult(_handler(Calls));
+            return Task.FromResult(_handler(Calls, request));
         }
     }
 

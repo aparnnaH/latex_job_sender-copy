@@ -10,6 +10,7 @@ import java.util.UUID;
  * idempotently by resumeVersionId.
  */
 public record ResumeTailoringRequestedEvent(
+        UUID requestId,
         UUID jobApplicationId,
         UUID resumeVersionId,
         String inputResumePath,

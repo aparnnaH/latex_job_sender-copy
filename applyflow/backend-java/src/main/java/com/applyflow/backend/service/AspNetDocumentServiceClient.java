@@ -17,8 +17,10 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
+import lombok.extern.slf4j.Slf4j;
 
 @Component
+@Slf4j
 public class AspNetDocumentServiceClient implements DocumentServiceClient {
 
     private final RestTemplate restTemplate;
@@ -40,24 +42,41 @@ public class AspNetDocumentServiceClient implements DocumentServiceClient {
 
     @Override
     public DocumentProcessingResult tailor(DocumentProcessingRequest request) {
+        var startedAt = System.nanoTime();
+        log.info("stage=document-service.http.request requestId={} applicationId={} resumeVersionId={}",
+                request.requestId(), request.applicationId(), request.resumeVersionId());
         try {
             var response = restTemplate.postForEntity(
                     "/api/documents/tailor",
-                    new HttpEntity<>(multipartBody(request), multipartHeaders()),
+                    new HttpEntity<>(multipartBody(request), multipartHeaders(request)),
                     DocumentResponse.class);
 
             var body = response.getBody();
             if (body == null) {
                 throw new DocumentServiceException("DOCUMENT_SERVICE_UNAVAILABLE", "The document service returned an empty response.", true);
             }
-            return mapBody(body);
+            var result = mapBody(body);
+            log.info("stage=document-service.http.response requestId={} applicationId={} resumeVersionId={} documentId={} safeErrorCode={} durationMs={}",
+                    request.requestId(), request.applicationId(), request.resumeVersionId(), result.documentId(), result.errorCode(), elapsedMs(startedAt));
+            return result;
         } catch (IOException exception) {
+            log.warn("stage=document-service.http.error requestId={} applicationId={} resumeVersionId={} safeErrorCode={} durationMs={}",
+                    request.requestId(), request.applicationId(), request.resumeVersionId(), "ARTIFACT_NOT_FOUND", elapsedMs(startedAt), exception);
             throw new DocumentServiceException("ARTIFACT_NOT_FOUND", "The uploaded resume could not be read for processing.", false);
         } catch (RestClientResponseException exception) {
-            throw mapErrorResponse(exception);
+            var mapped = mapErrorResponse(exception);
+            log.warn("stage=document-service.http.error requestId={} applicationId={} resumeVersionId={} safeErrorCode={} durationMs={}",
+                    request.requestId(), request.applicationId(), request.resumeVersionId(), mapped.code(), elapsedMs(startedAt), exception);
+            throw mapped;
         } catch (RestClientException exception) {
+            log.warn("stage=document-service.http.error requestId={} applicationId={} resumeVersionId={} safeErrorCode={} durationMs={}",
+                    request.requestId(), request.applicationId(), request.resumeVersionId(), "DOCUMENT_SERVICE_UNAVAILABLE", elapsedMs(startedAt), exception);
             throw new DocumentServiceException("DOCUMENT_SERVICE_UNAVAILABLE", "The document service is unavailable.", true);
         }
+    }
+
+    private long elapsedMs(long startedAt) {
+        return java.time.Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
     }
 
     private DocumentServiceException mapErrorResponse(RestClientResponseException exception) {
@@ -80,9 +99,13 @@ public class AspNetDocumentServiceClient implements DocumentServiceClient {
         return new DocumentServiceException(code, message, retryable);
     }
 
-    private static HttpHeaders multipartHeaders() {
+    private static HttpHeaders multipartHeaders(DocumentProcessingRequest request) {
         var headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        headers.set("X-Correlation-ID", request.requestId().toString());
+        headers.set("X-Request-ID", request.requestId().toString());
+        headers.set("X-Application-ID", request.applicationId().toString());
+        headers.set("X-Resume-Version-ID", request.resumeVersionId().toString());
         return headers;
     }
 

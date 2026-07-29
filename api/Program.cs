@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Diagnostics;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -49,19 +50,35 @@ app.MapPost("/api/documents/tailor", async (
     IDocumentStorage storage,
     ICurrentUserProvider currentUserProvider,
     IPythonTailoringClient pythonTailoringClient,
+    ILoggerFactory loggerFactory,
     CancellationToken cancellationToken) =>
 {
+    var logger = loggerFactory.CreateLogger("DocumentTailoring");
+    var startedAt = Stopwatch.StartNew();
     var validation = await DocumentRequestValidator.ValidateTailorFormAsync(request, cancellationToken);
     if (!validation.IsValid)
     {
+        var identity = RequestIdentity.FromRequest(request);
+        logger.LogWarning(
+            "stage=document.validation.failed requestId={RequestId} applicationId={ApplicationId} resumeVersionId={ResumeVersionId} safeErrorCode={SafeErrorCode} durationMs={DurationMs}",
+            identity.RequestId,
+            identity.ApplicationId,
+            identity.ResumeVersionId,
+            validation.Error?.Code,
+            startedAt.ElapsedMilliseconds);
         return ApiResults.Error(validation.Error!, validation.StatusCode);
     }
 
     var command = validation.Command!;
+    logger.LogInformation(
+        "stage=document.tailor.received requestId={RequestId} applicationId={ApplicationId} resumeVersionId={ResumeVersionId}",
+        command.RequestId,
+        command.ApplicationId,
+        command.ResumeVersionId);
     var ownerUserId = currentUserProvider.CurrentUserId;
     var document = await storage.CreateAsync(ownerUserId, command.ResumeFileName, command.ResumeContent, cancellationToken);
     var result = await pythonTailoringClient.TailorAsync(
-        new PythonTailoringRequest(document.Id, document.OriginalTexContent, command.JobDescription, command.Evidence),
+        new PythonTailoringRequest(document.Id, command.RequestId, command.ApplicationId, command.ResumeVersionId, document.OriginalTexContent, command.JobDescription, command.Evidence),
         cancellationToken);
 
     var updated = document with
@@ -74,6 +91,14 @@ app.MapPost("/api/documents/tailor", async (
     };
     await storage.SaveAsync(updated, cancellationToken);
 
+    logger.LogInformation(
+        "stage=document.tailor.completed requestId={RequestId} applicationId={ApplicationId} resumeVersionId={ResumeVersionId} documentId={DocumentId} safeErrorCode={SafeErrorCode} durationMs={DurationMs}",
+        command.RequestId,
+        command.ApplicationId,
+        command.ResumeVersionId,
+        updated.Id,
+        updated.Error?.Code,
+        startedAt.ElapsedMilliseconds);
     return Results.Json(DocumentResponses.FromDocument(updated));
 });
 
@@ -142,8 +167,9 @@ app.MapPost("/api/resumes/tailor", async (
     }
 
     var command = validation.Command!;
+    var legacyRequestId = Guid.NewGuid();
     var result = await pythonTailoringClient.TailorAsync(
-        new PythonTailoringRequest(Guid.NewGuid(), command.ResumeContent, command.JobDescription, command.Evidence),
+        new PythonTailoringRequest(Guid.NewGuid(), legacyRequestId, Guid.Empty, Guid.Empty, command.ResumeContent, command.JobDescription, command.Evidence),
         cancellationToken);
 
     if (result.Status == DocumentStatus.FAILED)
@@ -180,10 +206,43 @@ public sealed record ContractError(
 public sealed record ErrorEnvelope(ContractError Error);
 
 public sealed record TailorDocumentCommand(
+    Guid RequestId,
+    Guid ApplicationId,
+    Guid ResumeVersionId,
     string ResumeFileName,
     string ResumeContent,
     string JobDescription,
     JsonElement? Evidence);
+
+public sealed record RequestIdentity(Guid RequestId, Guid ApplicationId, Guid ResumeVersionId)
+{
+    public static RequestIdentity FromRequest(HttpRequest request)
+    {
+        Guid.TryParse(FirstValue(request, "requestId", "X-Request-ID", "X-Correlation-ID"), out var requestId);
+        Guid.TryParse(FirstValue(request, "applicationId", "X-Application-ID"), out var applicationId);
+        Guid.TryParse(FirstValue(request, "resumeVersionId", "X-Resume-Version-ID"), out var resumeVersionId);
+        return new RequestIdentity(
+            requestId == Guid.Empty ? Guid.NewGuid() : requestId,
+            applicationId,
+            resumeVersionId);
+    }
+
+    private static string? FirstValue(HttpRequest request, string formField, params string[] headers)
+    {
+        if (request.HasFormContentType && request.Form.TryGetValue(formField, out var formValue) && !string.IsNullOrWhiteSpace(formValue))
+        {
+            return formValue.ToString();
+        }
+        foreach (var header in headers)
+        {
+            if (request.Headers.TryGetValue(header, out var headerValue) && !string.IsNullOrWhiteSpace(headerValue))
+            {
+                return headerValue.ToString();
+            }
+        }
+        return null;
+    }
+}
 
 public sealed record ValidationResult(
     bool IsValid,
@@ -256,6 +315,9 @@ public sealed record DocumentResponse(
 
 public sealed record PythonTailoringRequest(
     Guid DocumentId,
+    Guid RequestId,
+    Guid ApplicationId,
+    Guid ResumeVersionId,
     string ResumeTexContent,
     string JobDescription,
     JsonElement? Evidence);
@@ -354,10 +416,12 @@ public sealed class HttpPythonTailoringClient : IPythonTailoringClient
 {
     private readonly HttpClient _httpClient;
     private readonly PythonServiceOptions _options;
+    private readonly ILogger<HttpPythonTailoringClient> _logger;
 
-    public HttpPythonTailoringClient(HttpClient httpClient, IConfiguration configuration)
+    public HttpPythonTailoringClient(HttpClient httpClient, IConfiguration configuration, ILogger<HttpPythonTailoringClient> logger)
     {
         _httpClient = httpClient;
+        _logger = logger;
         _options = configuration
             .GetSection(PythonServiceOptions.SectionName)
             .Get<PythonServiceOptions>() ?? new PythonServiceOptions();
@@ -365,6 +429,7 @@ public sealed class HttpPythonTailoringClient : IPythonTailoringClient
 
     public async Task<PythonTailoringResult> TailorAsync(PythonTailoringRequest request, CancellationToken cancellationToken)
     {
+        var startedAt = Stopwatch.StartNew();
         var attempts = Math.Max(1, _options.RetryAttempts + 1);
         for (var attempt = 1; attempt <= attempts; attempt += 1)
         {
@@ -372,22 +437,70 @@ public sealed class HttpPythonTailoringClient : IPythonTailoringClient
             {
                 using var httpRequest = BuildRequest(request);
                 using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
-                return await MapResponseAsync(response, cancellationToken);
+                var result = await MapResponseAsync(response, cancellationToken);
+                _logger.LogInformation(
+                    "stage=python.http.response requestId={RequestId} applicationId={ApplicationId} resumeVersionId={ResumeVersionId} documentId={DocumentId} safeErrorCode={SafeErrorCode} attempt={Attempt} durationMs={DurationMs}",
+                    request.RequestId,
+                    request.ApplicationId,
+                    request.ResumeVersionId,
+                    request.DocumentId,
+                    result.Error?.Code,
+                    attempt,
+                    startedAt.ElapsedMilliseconds);
+                return result;
             }
-            catch (HttpRequestException) when (attempt < attempts)
+            catch (HttpRequestException exception) when (attempt < attempts)
             {
+                _logger.LogWarning(
+                    exception,
+                    "stage=python.http.retry requestId={RequestId} applicationId={ApplicationId} resumeVersionId={ResumeVersionId} documentId={DocumentId} safeErrorCode={SafeErrorCode} attempt={Attempt} durationMs={DurationMs}",
+                    request.RequestId,
+                    request.ApplicationId,
+                    request.ResumeVersionId,
+                    request.DocumentId,
+                    "DOCUMENT_SERVICE_UNAVAILABLE",
+                    attempt,
+                    startedAt.ElapsedMilliseconds);
                 await Task.Delay(TimeSpan.FromMilliseconds(150 * attempt), cancellationToken);
             }
-            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested && attempt < attempts)
+            catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested && attempt < attempts)
             {
+                _logger.LogWarning(
+                    exception,
+                    "stage=python.http.retry requestId={RequestId} applicationId={ApplicationId} resumeVersionId={ResumeVersionId} documentId={DocumentId} safeErrorCode={SafeErrorCode} attempt={Attempt} durationMs={DurationMs}",
+                    request.RequestId,
+                    request.ApplicationId,
+                    request.ResumeVersionId,
+                    request.DocumentId,
+                    "PYTHON_PROCESS_TIMEOUT",
+                    attempt,
+                    startedAt.ElapsedMilliseconds);
                 await Task.Delay(TimeSpan.FromMilliseconds(150 * attempt), cancellationToken);
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException exception)
             {
+                _logger.LogWarning(
+                    exception,
+                    "stage=python.http.error requestId={RequestId} applicationId={ApplicationId} resumeVersionId={ResumeVersionId} documentId={DocumentId} safeErrorCode={SafeErrorCode} durationMs={DurationMs}",
+                    request.RequestId,
+                    request.ApplicationId,
+                    request.ResumeVersionId,
+                    request.DocumentId,
+                    "DOCUMENT_SERVICE_UNAVAILABLE",
+                    startedAt.ElapsedMilliseconds);
                 return Failed("DOCUMENT_SERVICE_UNAVAILABLE", "The Python tailoring service is unavailable.", retryable: true);
             }
-            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
+                _logger.LogWarning(
+                    exception,
+                    "stage=python.http.error requestId={RequestId} applicationId={ApplicationId} resumeVersionId={ResumeVersionId} documentId={DocumentId} safeErrorCode={SafeErrorCode} durationMs={DurationMs}",
+                    request.RequestId,
+                    request.ApplicationId,
+                    request.ResumeVersionId,
+                    request.DocumentId,
+                    "PYTHON_PROCESS_TIMEOUT",
+                    startedAt.ElapsedMilliseconds);
                 return Failed("PYTHON_PROCESS_TIMEOUT", "The Python tailoring service timed out.", retryable: true);
             }
         }
@@ -400,12 +513,19 @@ public sealed class HttpPythonTailoringClient : IPythonTailoringClient
         var content = new MultipartFormDataContent();
         content.Add(new StringContent(request.ResumeTexContent), "resume", "resume.tex");
         content.Add(new StringContent(request.JobDescription), "jobDescription");
+        content.Add(new StringContent(request.RequestId.ToString()), "requestId");
+        content.Add(new StringContent(request.ApplicationId.ToString()), "applicationId");
+        content.Add(new StringContent(request.ResumeVersionId.ToString()), "resumeVersionId");
         if (request.Evidence is not null)
         {
             content.Add(new StringContent(JsonSerializer.Serialize(request.Evidence.Value, JsonDefaults.Options)), "evidence");
         }
-
-        return new HttpRequestMessage(HttpMethod.Post, "/api/tailor") { Content = content };
+        var message = new HttpRequestMessage(HttpMethod.Post, "/api/tailor") { Content = content };
+        message.Headers.TryAddWithoutValidation("X-Correlation-ID", request.RequestId.ToString());
+        message.Headers.TryAddWithoutValidation("X-Request-ID", request.RequestId.ToString());
+        message.Headers.TryAddWithoutValidation("X-Application-ID", request.ApplicationId.ToString());
+        message.Headers.TryAddWithoutValidation("X-Resume-Version-ID", request.ResumeVersionId.ToString());
+        return message;
     }
 
     private static async Task<PythonTailoringResult> MapResponseAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -762,6 +882,7 @@ public static class DocumentRequestValidator
         }
 
         var form = await request.ReadFormAsync(cancellationToken);
+        var identity = RequestIdentity.FromRequest(request);
         var resume = form.Files.GetFile("resume");
         var jobDescription = form["jobDescription"].ToString();
         var evidence = form["evidence"].ToString();
@@ -822,6 +943,9 @@ public static class DocumentRequestValidator
         }
 
         return ValidationResult.Success(new TailorDocumentCommand(
+            identity.RequestId,
+            identity.ApplicationId,
+            identity.ResumeVersionId,
             Path.GetFileName(resume.FileName),
             resumeContent,
             jobDescription,

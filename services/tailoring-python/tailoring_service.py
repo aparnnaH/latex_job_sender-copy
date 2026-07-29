@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +28,23 @@ from tailor_resume import (
 
 
 MAX_UPLOAD_BYTES = 1_048_576
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+LOGGER = logging.getLogger("tailoring_service")
+
+
+def log_event(stage: str, request_id: str, application_id: str, resume_version_id: str, duration_ms: int | None = None, safe_error_code: str | None = None) -> None:
+    payload: dict[str, Any] = {
+        "stage": stage,
+        "requestId": request_id,
+        "applicationId": application_id,
+        "resumeVersionId": resume_version_id,
+    }
+    if duration_ms is not None:
+        payload["durationMs"] = duration_ms
+    if safe_error_code is not None:
+        payload["safeErrorCode"] = safe_error_code
+    LOGGER.info(json.dumps(payload, sort_keys=True))
 
 
 @dataclass(frozen=True)
@@ -93,19 +112,29 @@ def process_tailor_upload(
     job_description: str,
     evidence_json: str | None = None,
     max_upload_bytes: int = MAX_UPLOAD_BYTES,
+    request_id: str = "",
+    application_id: str = "",
+    resume_version_id: str = "",
 ) -> TailorApiResponse:
+    started_at = time.monotonic()
+    log_event("python.tailor.received", request_id, application_id, resume_version_id)
     if not resume_filename.lower().endswith(".tex"):
+        log_event("python.validation.failed", request_id, application_id, resume_version_id, safe_error_code="INVALID_FILE_TYPE")
         raise ApiValidationError("INVALID_FILE_TYPE", "Only .tex resume uploads are supported.")
     if not resume_content:
+        log_event("python.validation.failed", request_id, application_id, resume_version_id, safe_error_code="EMPTY_RESUME")
         raise ApiValidationError("EMPTY_RESUME", "Uploaded resume is empty.")
     if len(resume_content) > max_upload_bytes:
+        log_event("python.validation.failed", request_id, application_id, resume_version_id, safe_error_code="FILE_TOO_LARGE")
         raise ApiValidationError("FILE_TOO_LARGE", "Uploaded resume exceeds the configured size limit.", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
     if not job_description.strip():
+        log_event("python.validation.failed", request_id, application_id, resume_version_id, safe_error_code="EMPTY_JOB_DESCRIPTION")
         raise ApiValidationError("EMPTY_JOB_DESCRIPTION", "Job description is required.")
 
     try:
         evidence = parse_evidence_json(evidence_json)
     except InvalidEvidenceError as error:
+        log_event("python.validation.failed", request_id, application_id, resume_version_id, safe_error_code="INVALID_EVIDENCE_JSON")
         raise ApiValidationError("INVALID_EVIDENCE_JSON", str(error)) from error
 
     with tempfile.TemporaryDirectory(prefix="tailortex-api-") as temp_dir:
@@ -132,8 +161,10 @@ def process_tailor_upload(
             report = build_report(resume_source, job_description, warnings=[], evidence=evidence)
             report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         except InvalidLatexError as error:
+            log_event("python.tailor.failed", request_id, application_id, resume_version_id, int((time.monotonic() - started_at) * 1000), "INVALID_LATEX")
             raise ApiValidationError("INVALID_LATEX", str(error), HTTPStatus.UNPROCESSABLE_ENTITY) from error
 
+        log_event("python.tailor.completed", request_id, application_id, resume_version_id, int((time.monotonic() - started_at) * 1000))
         return TailorApiResponse(
             status_code=HTTPStatus.OK,
             payload={
@@ -154,6 +185,9 @@ def handle_tailor_multipart(body: bytes, content_type: str) -> TailorApiResponse
     resume_filename, resume_content = fields.get("resume", (None, b""))
     _, job_description_bytes = fields.get("jobDescription", (None, b""))
     _, evidence_bytes = fields.get("evidence", (None, b""))
+    _, request_id_bytes = fields.get("requestId", (None, b""))
+    _, application_id_bytes = fields.get("applicationId", (None, b""))
+    _, resume_version_id_bytes = fields.get("resumeVersionId", (None, b""))
     if resume_filename is None:
         raise ApiValidationError("MISSING_RESUME", "The resume file field is required.")
     return process_tailor_upload(
@@ -161,6 +195,9 @@ def handle_tailor_multipart(body: bytes, content_type: str) -> TailorApiResponse
         resume_content=resume_content,
         job_description=job_description_bytes.decode("utf-8", errors="replace"),
         evidence_json=evidence_bytes.decode("utf-8", errors="replace") if evidence_bytes else None,
+        request_id=request_id_bytes.decode("utf-8", errors="replace"),
+        application_id=application_id_bytes.decode("utf-8", errors="replace"),
+        resume_version_id=resume_version_id_bytes.decode("utf-8", errors="replace"),
     )
 
 
@@ -190,6 +227,10 @@ class TailoringRequestHandler(BaseHTTPRequestHandler):
         except ApiValidationError as error:
             self.write_json(error.status_code, error_payload(error.code, error.message))
         except Exception:
+            LOGGER.exception(json.dumps({
+                "stage": "python.tailor.unhandled-error",
+                "safeErrorCode": "INTERNAL_ERROR",
+            }, sort_keys=True))
             self.write_json(HTTPStatus.INTERNAL_SERVER_ERROR, error_payload("INTERNAL_ERROR", "Tailoring failed unexpectedly.", retryable=True))
 
     def log_message(self, format: str, *args: object) -> None:

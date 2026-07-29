@@ -61,6 +61,7 @@ public class ResumeVersionService {
 
         var saved = resumeVersionRepository.save(version);
         eventPublisher.publish(new ResumeTailoringRequestedEvent(
+                UUID.randomUUID(),
                 jobApplicationId,
                 saved.getId(),
                 saved.getStoredFilePath(),
@@ -172,6 +173,7 @@ public class ResumeVersionService {
 
         var saved = resumeVersionRepository.save(version);
         eventPublisher.publish(new ResumeTailoringRequestedEvent(
+                UUID.randomUUID(),
                 source.getJobApplicationId(),
                 saved.getId(),
                 saved.getStoredFilePath(),

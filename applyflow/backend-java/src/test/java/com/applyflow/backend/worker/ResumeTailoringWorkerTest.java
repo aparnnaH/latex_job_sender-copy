@@ -210,6 +210,7 @@ class ResumeTailoringWorkerTest {
         var versionId = UUID.randomUUID();
         return new ResumeTailoringRequestedEvent(
                 UUID.randomUUID(),
+                UUID.randomUUID(),
                 versionId,
                 tempDir.resolve("input.tex").toString(),
                 "Build Java services",

@@ -17,6 +17,13 @@ public class ResumeTailoringEventPublisher {
         rabbitTemplate.convertAndSend(
                 properties.rabbitmq().exchange(),
                 properties.rabbitmq().routingKey(),
-                event);
+                event,
+                message -> {
+                    message.getMessageProperties().setCorrelationId(event.requestId().toString());
+                    message.getMessageProperties().setHeader("requestId", event.requestId().toString());
+                    message.getMessageProperties().setHeader("applicationId", event.jobApplicationId().toString());
+                    message.getMessageProperties().setHeader("resumeVersionId", event.resumeVersionId().toString());
+                    return message;
+                });
     }
 }

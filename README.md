@@ -69,6 +69,28 @@ PostgreSQL, RabbitMQ, uploaded resumes, and file-backed document records use nam
 docker compose down -v
 ```
 
+### Backend Smoke Test
+
+After the Compose stack is healthy, run the deterministic backend workflow smoke test:
+
+```sh
+scripts/backend-smoke-test.sh
+```
+
+The script requires `curl` and `jq`. It creates a fictional job application through Java, uploads a fictional `.tex` resume, waits up to 60 seconds for tailoring to reach `COMPLETED`, verifies the document ID, retrieves the review/report, confirms generated `.tex` exists, checks that no unsupported skill was invented, and deletes the test application when it exits.
+
+Useful overrides:
+
+```sh
+JAVA_API_BASE_URL=http://localhost:8080 \
+SMOKE_TIMEOUT_SECONDS=90 \
+scripts/backend-smoke-test.sh
+```
+
+## Logging and Correlation
+
+Tailoring requests use a generated correlation ID across Java, RabbitMQ, ASP.NET, and Python logs. See [docs/correlation-and-logging.md](docs/correlation-and-logging.md) for the exact RabbitMQ fields, HTTP headers, safe log fields, and sensitive data rules.
+
 ## ApplyFlow
 
 The first Java/Spring Boot backend step now lives in `applyflow/`.

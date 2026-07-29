@@ -32,9 +32,13 @@ public class ResumeTailoringWorker {
     @RabbitListener(queues = "${applyflow.rabbitmq.queue}")
     public void handle(ResumeTailoringRequestedEvent event, Message message, Channel channel) throws IOException {
         var deliveryTag = message.getMessageProperties().getDeliveryTag();
+        var startedAt = System.nanoTime();
+        log.info("stage=tailoring.rabbit.received requestId={} applicationId={} resumeVersionId={}",
+                event.requestId(), event.jobApplicationId(), event.resumeVersionId());
         var attempt = resumeVersionService.beginProcessing(event.resumeVersionId());
         if (attempt.isEmpty()) {
-            log.info("Skipping duplicate or already-processed resume tailoring event for version {}", event.resumeVersionId());
+            log.info("stage=tailoring.skipped requestId={} applicationId={} resumeVersionId={} durationMs={}",
+                    event.requestId(), event.jobApplicationId(), event.resumeVersionId(), elapsedMs(startedAt));
             channel.basicAck(deliveryTag, false);
             return;
         }
@@ -42,7 +46,7 @@ public class ResumeTailoringWorker {
         var outputPath = Path.of(event.outputResumePath());
         try {
             var result = documentServiceClient.tailor(new DocumentServiceClient.DocumentProcessingRequest(
-                    UUID.randomUUID(),
+                    event.requestId(),
                     event.jobApplicationId(),
                     event.resumeVersionId(),
                     Path.of(event.inputResumePath()).getFileName().toString(),
@@ -58,7 +62,8 @@ public class ResumeTailoringWorker {
                         result.documentId() == null ? null : result.documentId().toString(),
                         result.reportJson(),
                         result.tailoredTex());
-                log.info("Document service tailoring completed for version {}", event.resumeVersionId());
+                log.info("stage=tailoring.completed requestId={} applicationId={} resumeVersionId={} documentId={} durationMs={}",
+                        event.requestId(), event.jobApplicationId(), event.resumeVersionId(), result.documentId(), elapsedMs(startedAt));
                 channel.basicAck(deliveryTag, false);
                 return;
             }
@@ -71,10 +76,13 @@ public class ResumeTailoringWorker {
             return;
         } catch (DocumentServiceException exception) {
             if (!properties.documentService().pythonFallbackEnabled()) {
+                log.warn("stage=document-service.error requestId={} applicationId={} resumeVersionId={} safeErrorCode={} durationMs={}",
+                        event.requestId(), event.jobApplicationId(), event.resumeVersionId(), exception.code(), elapsedMs(startedAt), exception);
                 finishFailure(event, deliveryTag, channel, attempt.get(), exception.retryable(), exception.code(), exception.safeMessage());
                 return;
             }
-            log.warn("Document service failed for version {}; using development Python fallback", event.resumeVersionId());
+            log.warn("stage=document-service.fallback requestId={} applicationId={} resumeVersionId={} safeErrorCode={} durationMs={}",
+                    event.requestId(), event.jobApplicationId(), event.resumeVersionId(), exception.code(), elapsedMs(startedAt), exception);
         }
 
         PythonTailoringResult result = null;
@@ -88,13 +96,16 @@ public class ResumeTailoringWorker {
 
             if (result.succeeded() && outputPath.toFile().exists()) {
                 resumeVersionService.markCompleted(event.resumeVersionId(), outputPath.toString());
-                log.info("Resume tailoring completed for version {} in {} ms", event.resumeVersionId(), result.duration().toMillis());
+                log.info("stage=python-fallback.completed requestId={} applicationId={} resumeVersionId={} durationMs={}",
+                        event.requestId(), event.jobApplicationId(), event.resumeVersionId(), result.duration().toMillis());
                 channel.basicAck(deliveryTag, false);
                 return;
             }
 
             storageService.deleteIfExists(outputPath);
-            log.warn("Resume tailoring attempt {} of {} failed for version {} in {} ms", attempt, maxAttempts, event.resumeVersionId(), result.duration().toMillis());
+            log.warn("stage=python-fallback.attempt-failed requestId={} applicationId={} resumeVersionId={} attempt={} maxAttempts={} safeErrorCode={} durationMs={}",
+                    event.requestId(), event.jobApplicationId(), event.resumeVersionId(), attempt, maxAttempts,
+                    result.timedOut() ? "PYTHON_PROCESS_TIMEOUT" : "PYTHON_PROCESS_FAILED", result.duration().toMillis());
         }
 
         var reason = result != null && result.timedOut()
@@ -102,6 +113,10 @@ public class ResumeTailoringWorker {
                 : "Python tailoring failed with exit code " + (result == null ? "unknown" : result.exitCode()) + ".";
         var code = result != null && result.timedOut() ? "PYTHON_PROCESS_TIMEOUT" : "PYTHON_PROCESS_FAILED";
         finishFailure(event, deliveryTag, channel, attempt.get(), result != null && result.timedOut(), code, reason);
+    }
+
+    private long elapsedMs(long startedAt) {
+        return java.time.Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
     }
 
     private void finishFailure(
@@ -115,13 +130,15 @@ public class ResumeTailoringWorker {
         var maxAttempts = Math.max(1, properties.tailoring().maxAttempts());
         if (retryable && attempt < maxAttempts) {
             resumeVersionService.markPendingForRetry(event.resumeVersionId(), errorCode, safeMessage);
-            log.warn("Retrying resume tailoring version {} after attempt {} of {}", event.resumeVersionId(), attempt, maxAttempts);
+            log.warn("stage=tailoring.retry requestId={} applicationId={} resumeVersionId={} attempt={} maxAttempts={} safeErrorCode={}",
+                    event.requestId(), event.jobApplicationId(), event.resumeVersionId(), attempt, maxAttempts, errorCode);
             channel.basicNack(deliveryTag, false, true);
             return;
         }
 
         resumeVersionService.markFailed(event.resumeVersionId(), errorCode, safeMessage);
-        log.warn("Resume tailoring version {} failed after attempt {} of {}", event.resumeVersionId(), attempt, maxAttempts);
+        log.warn("stage=tailoring.failed requestId={} applicationId={} resumeVersionId={} attempt={} maxAttempts={} safeErrorCode={}",
+                event.requestId(), event.jobApplicationId(), event.resumeVersionId(), attempt, maxAttempts, errorCode);
         channel.basicReject(deliveryTag, false);
     }
 }

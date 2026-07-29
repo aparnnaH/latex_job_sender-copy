@@ -3,6 +3,7 @@ package com.applyflow.backend.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServiceUnavailable;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -27,11 +28,13 @@ class AspNetDocumentServiceClientTest {
     @Test
     void tailorPostsMultipartRequestAndMapsCompletedResponse() throws Exception {
         var context = context();
+        var requestId = UUID.randomUUID();
         var documentId = UUID.randomUUID();
         var resumePath = tempDir.resolve("resume.tex");
         Files.writeString(resumePath, "\\documentclass{article}");
         context.server.expect(requestTo("http://documents.test/api/documents/tailor"))
                 .andExpect(content().contentTypeCompatibleWith(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(header("X-Correlation-ID", requestId.toString()))
                 .andRespond(withSuccess("""
                         {
                           "documentId": "%s",
@@ -42,7 +45,7 @@ class AspNetDocumentServiceClientTest {
                         """.formatted(documentId), MediaType.APPLICATION_JSON));
 
         var result = context.client.tailor(new DocumentServiceClient.DocumentProcessingRequest(
-                UUID.randomUUID(),
+                requestId,
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 "resume.tex",
