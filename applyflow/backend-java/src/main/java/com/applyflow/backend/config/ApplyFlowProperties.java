@@ -8,12 +8,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record ApplyFlowProperties(
         Storage storage,
         Tailoring tailoring,
+        DocumentService documentService,
         Rabbit rabbitmq
 ) {
     public record Storage(Path resumesDir, long maxUploadBytes) {
     }
 
     public record Tailoring(String pythonExecutable, Path pythonScriptPath, Duration timeout, int maxAttempts) {
+    }
+
+    public record DocumentService(String baseUrl, Duration timeout, boolean pythonFallbackEnabled, boolean compilePdf) {
     }
 
     public record Rabbit(

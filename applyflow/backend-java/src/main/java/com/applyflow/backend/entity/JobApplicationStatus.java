@@ -2,11 +2,11 @@ package com.applyflow.backend.entity;
 
 public enum JobApplicationStatus {
     SAVED,
-    ANALYZING,
-    RESUME_READY,
+    PREPARING_RESUME,
+    READY_TO_REVIEW,
     APPLIED,
     INTERVIEW,
-    OFFER,
     REJECTED,
+    OFFER,
     WITHDRAWN
 }

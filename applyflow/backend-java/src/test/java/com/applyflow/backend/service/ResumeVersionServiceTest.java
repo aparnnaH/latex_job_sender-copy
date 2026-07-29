@@ -34,7 +34,6 @@ class ResumeVersionServiceTest {
     private ResumeFileStorageService storageService;
     @Mock
     private ResumeTailoringEventPublisher eventPublisher;
-
     private ResumeVersionService service;
 
     @BeforeEach
@@ -65,6 +64,9 @@ class ResumeVersionServiceTest {
         ResumeVersionResponse response = service.requestTailoring(application.getId(), file);
 
         assertThat(response.tailoringStatus()).isEqualTo(TailoringStatus.PENDING);
+        assertThat(response.processingStatus()).isEqualTo(TailoringStatus.PENDING);
+        assertThat(response.baseResumeName()).isEqualTo("resume.tex");
+        assertThat(response.documentServiceId()).isNull();
         assertThat(response.versionNumber()).isEqualTo(3);
 
         ArgumentCaptor<ResumeTailoringRequestedEvent> eventCaptor = ArgumentCaptor.forClass(ResumeTailoringRequestedEvent.class);

@@ -30,6 +30,8 @@ public class ResumeVersion {
     @Column(nullable = false)
     private String originalFileName;
 
+    private String baseResumeName;
+
     @Column(nullable = false, length = 2048)
     private String storedFilePath;
 
@@ -39,9 +41,15 @@ public class ResumeVersion {
     @Column(nullable = false)
     private Integer versionNumber;
 
+    private String documentServiceId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private TailoringStatus tailoringStatus;
+
+    @Column(nullable = false)
+    @Enumerated(EnumType.STRING)
+    private TailoringStatus processingStatus;
 
     @Column(nullable = false)
     private OffsetDateTime createdAt;
@@ -51,6 +59,11 @@ public class ResumeVersion {
 
     @Column(columnDefinition = "text")
     private String failureMessage;
+
+    private String errorCode;
+
+    @Column(columnDefinition = "text")
+    private String safeErrorMessage;
 
     @Column(nullable = false)
     private Integer attemptCount = 0;
@@ -66,6 +79,9 @@ public class ResumeVersion {
         }
         if (tailoringStatus == null) {
             tailoringStatus = TailoringStatus.PENDING;
+        }
+        if (processingStatus == null) {
+            processingStatus = tailoringStatus;
         }
         var now = OffsetDateTime.now();
         createdAt = now;

@@ -36,9 +36,22 @@ public class JobApplication {
     @Column(length = 2048)
     private String jobUrl;
 
+    private String location;
+
+    private String source;
+
+    private OffsetDateTime dateFound;
+
+    private OffsetDateTime dateApplied;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private JobApplicationStatus status;
+
+    @Column(columnDefinition = "text")
+    private String notes;
+
+    private String resumeUsed;
 
     @Column(nullable = false)
     private OffsetDateTime createdAt;

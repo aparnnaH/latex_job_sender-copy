@@ -26,6 +26,11 @@ applyflow:
     python-script-path: ${PYTHON_TAILORING_SCRIPT_PATH:../resume-tailor-python/tailor_resume.py}
     timeout: ${PYTHON_TAILORING_TIMEOUT:PT60S}
     max-attempts: ${APPLYFLOW_TAILORING_RETRY_ATTEMPTS:3}
+  document-service:
+    base-url: ${APPLYFLOW_DOCUMENT_SERVICE_URL:http://localhost:5000}
+    timeout: ${APPLYFLOW_DOCUMENT_SERVICE_TIMEOUT:PT60S}
+    python-fallback-enabled: ${APPLYFLOW_DOCUMENT_SERVICE_PYTHON_FALLBACK_ENABLED:false}
+    compile-pdf: ${APPLYFLOW_DOCUMENT_SERVICE_COMPILE_PDF:true}
   rabbitmq:
     exchange: ${APPLYFLOW_RABBITMQ_EXCHANGE:applyflow.resume-tailoring}
     queue: ${APPLYFLOW_RABBITMQ_QUEUE:applyflow.resume-tailoring.requests}

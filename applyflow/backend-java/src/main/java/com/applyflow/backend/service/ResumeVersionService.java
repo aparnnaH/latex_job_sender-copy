@@ -39,10 +39,12 @@ public class ResumeVersionService {
         version.setId(resumeVersionId);
         version.setJobApplicationId(jobApplicationId);
         version.setOriginalFileName(file.getOriginalFilename());
+        version.setBaseResumeName(file.getOriginalFilename());
         version.setStoredFilePath(storedFiles.inputPath().toString());
         version.setOutputFilePath(storedFiles.outputPath().toString());
         version.setVersionNumber((int) resumeVersionRepository.countByJobApplicationId(jobApplicationId) + 1);
         version.setTailoringStatus(TailoringStatus.PENDING);
+        version.setProcessingStatus(TailoringStatus.PENDING);
 
         var saved = resumeVersionRepository.save(version);
         eventPublisher.publish(new ResumeTailoringRequestedEvent(
@@ -58,6 +60,16 @@ public class ResumeVersionService {
     @Transactional(readOnly = true)
     public ResumeVersionResponse findById(UUID id) {
         return mapper.toResponse(findEntity(id));
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.List<ResumeVersionResponse> findByJobApplicationId(UUID jobApplicationId) {
+        if (!jobApplicationRepository.existsById(jobApplicationId)) {
+            throw new ResourceNotFoundException("Job application not found: " + jobApplicationId);
+        }
+        return resumeVersionRepository.findByJobApplicationIdOrderByVersionNumberDesc(jobApplicationId).stream()
+                .map(mapper::toResponse)
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -80,19 +92,36 @@ public class ResumeVersionService {
 
     @Transactional
     public void markCompleted(UUID id, String outputPath) {
+        markCompleted(id, outputPath, null);
+    }
+
+    @Transactional
+    public void markCompleted(UUID id, String outputPath, String documentServiceId) {
         var version = findEntity(id);
         version.setTailoringStatus(TailoringStatus.COMPLETED);
+        version.setProcessingStatus(TailoringStatus.COMPLETED);
         version.setOutputFilePath(outputPath);
+        version.setDocumentServiceId(documentServiceId);
         version.setProcessingCompletedAt(OffsetDateTime.now());
         version.setFailureMessage(null);
+        version.setErrorCode(null);
+        version.setSafeErrorMessage(null);
         resumeVersionRepository.save(version);
     }
 
     @Transactional
     public void markFailed(UUID id, String message) {
+        markFailed(id, null, message);
+    }
+
+    @Transactional
+    public void markFailed(UUID id, String errorCode, String safeErrorMessage) {
         var version = findEntity(id);
         version.setTailoringStatus(TailoringStatus.FAILED);
-        version.setFailureMessage(message);
+        version.setProcessingStatus(TailoringStatus.FAILED);
+        version.setFailureMessage(safeErrorMessage);
+        version.setErrorCode(errorCode);
+        version.setSafeErrorMessage(safeErrorMessage);
         version.setProcessingCompletedAt(OffsetDateTime.now());
         resumeVersionRepository.save(version);
     }

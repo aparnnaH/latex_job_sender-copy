@@ -10,7 +10,13 @@ public record JobApplicationResponse(
         String jobTitle,
         String jobDescription,
         String jobUrl,
+        String location,
+        String source,
+        OffsetDateTime dateFound,
+        OffsetDateTime dateApplied,
         JobApplicationStatus status,
+        String notes,
+        String resumeUsed,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
 ) {

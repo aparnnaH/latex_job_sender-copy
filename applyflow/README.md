@@ -9,20 +9,14 @@ Frontend or API client
   -> Java Spring Boot API
   -> RabbitMQ
   -> Java tailoring worker
-  -> existing Python tailoring command
-  -> generated LaTeX resume
+  -> ASP.NET Core document service
+  -> Python tailoring engine / compiler behind the document service
   -> PostgreSQL resume-version status update
 ```
 
 Java owns application management, resume upload handling, persistence, events, workflow statuses, retries, failure cleanup, and resume version history.
 
-Python is called with the existing interface:
-
-```sh
-python3 path/to/script.py input-resume.tex "job description text" output-resume.tex
-```
-
-This repository snapshot still does not contain the Python script, so configure `PYTHON_TAILORING_SCRIPT_PATH` once the existing tool is placed under `resume-tailor-python`.
+Production resume tailoring goes through the ASP.NET Core document service at `APPLYFLOW_DOCUMENT_SERVICE_URL`. The older direct-Python command remains available only as an optional development fallback.
 
 ## Structure
 
@@ -74,11 +68,17 @@ SPRING_DATASOURCE_USERNAME=applyflow
 SPRING_DATASOURCE_PASSWORD=applyflow
 APPLYFLOW_RESUME_STORAGE_DIR=/tmp/applyflow/resumes
 APPLYFLOW_MAX_UPLOAD_BYTES=1048576
+APPLYFLOW_DOCUMENT_SERVICE_URL=http://localhost:5000
+APPLYFLOW_DOCUMENT_SERVICE_TIMEOUT=PT60S
+APPLYFLOW_DOCUMENT_SERVICE_PYTHON_FALLBACK_ENABLED=false
+APPLYFLOW_DOCUMENT_SERVICE_COMPILE_PDF=true
 PYTHON_EXECUTABLE=python3
 PYTHON_TAILORING_SCRIPT_PATH=../resume-tailor-python/tailor_resume.py
 PYTHON_TAILORING_TIMEOUT=PT60S
 APPLYFLOW_TAILORING_RETRY_ATTEMPTS=3
 ```
+
+Set `APPLYFLOW_DOCUMENT_SERVICE_PYTHON_FALLBACK_ENABLED=true` only for local development when the ASP.NET document service is not running and direct Python execution is acceptable. Keep it `false` in production so Java records document-service failures through the shared error fields instead of silently bypassing the service.
 
 RabbitMQ names can also be overridden:
 
@@ -125,6 +125,13 @@ curl -X POST http://localhost:8080/api/applications/APPLICATION_ID/resumes/tailo
   -F "resume=@../resume-project/main.tex"
 ```
 
+Normalized frontend endpoint:
+
+```sh
+curl -X POST http://localhost:8080/api/applications/APPLICATION_ID/tailor \
+  -F "resume=@../resume-project/main.tex"
+```
+
 Check a resume version:
 
 ```sh
@@ -145,9 +152,12 @@ POST   /api/applications
 GET    /api/applications
 GET    /api/applications/{id}
 PUT    /api/applications/{id}
+PATCH  /api/applications/{id}
 PATCH  /api/applications/{id}/status
 DELETE /api/applications/{id}
+POST   /api/applications/{id}/tailor
 POST   /api/applications/{id}/resumes/tailor
+GET    /api/applications/{id}/resume-versions
 GET    /api/resume-versions/{id}
 GET    /api/resume-versions/{id}/download
 ```
