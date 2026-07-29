@@ -55,7 +55,9 @@ public class ResumeTailoringWorker {
                 resumeVersionService.markCompleted(
                         event.resumeVersionId(),
                         outputPath.toString(),
-                        result.documentId() == null ? null : result.documentId().toString());
+                        result.documentId() == null ? null : result.documentId().toString(),
+                        result.reportJson(),
+                        result.tailoredTex());
                 log.info("Document service tailoring completed for version {}", event.resumeVersionId());
                 channel.basicAck(deliveryTag, false);
                 return;

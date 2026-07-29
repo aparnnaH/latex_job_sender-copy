@@ -104,6 +104,23 @@ export type ResumeVersion = {
   processingCompletedAt?: string | null;
 };
 
+export type ResumeVersionReview = {
+  id: string;
+  jobApplicationId: string;
+  versionNumber: number;
+  originalFileName: string;
+  baseResumeName?: string | null;
+  originalTex: string;
+  tailoredTex: string;
+  matchScoreBefore?: number | null;
+  matchScoreAfter?: number | null;
+  matchedKeywords: string[];
+  missingKeywords: string[];
+  sectionsChanged: string[];
+  warnings: string[];
+  unsupportedClaimsRejected: string[];
+};
+
 export type StatusSummary = {
   status: string;
   checks: {

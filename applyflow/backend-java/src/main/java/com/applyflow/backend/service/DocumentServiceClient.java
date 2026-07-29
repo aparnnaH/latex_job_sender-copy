@@ -23,6 +23,7 @@ public interface DocumentServiceClient {
             UUID documentId,
             DocumentProcessingStatus status,
             String tailoredTex,
+            String reportJson,
             String errorCode,
             String safeErrorMessage,
             boolean retryable

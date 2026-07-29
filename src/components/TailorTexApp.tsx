@@ -14,7 +14,7 @@ import {
 import { sampleJobDescription, sampleLatexResume, sampleOverleafFiles } from "@/lib/samples";
 import { aiResponseSchema, autofillProfileSchema, jobInputSchema, latexSourceSchema } from "@/lib/schemas";
 import { backendApi, isBackendMode, localApi } from "@/lib/api";
-import type { ApplicationStatus, JobApplication, JobApplicationRequest, ResumeVersion } from "@/lib/api";
+import type { ApplicationStatus, JobApplication, JobApplicationRequest, ResumeVersion, ResumeVersionReview } from "@/lib/api";
 import type {
   AcceptedChange,
   AiResponseShape,
@@ -7205,6 +7205,13 @@ function BackendApplicationTrackerPanel({
   const [selectedResumeFiles, setSelectedResumeFiles] = useState<Record<string, File | undefined>>({});
   const [resumeVersions, setResumeVersions] = useState<Record<string, ResumeVersion[]>>({});
   const [versionMessages, setVersionMessages] = useState<Record<string, string | undefined>>({});
+  const [reviewState, setReviewState] = useState<{
+    applicationId: string;
+    versionId: string;
+    state: "loading" | "ready" | "error";
+    message?: string;
+    review?: ResumeVersionReview;
+  } | null>(null);
   const isSaving = status.state === "saving";
 
   const loadVersions = useCallback(async (applicationId: string) => {
@@ -7257,7 +7264,7 @@ function BackendApplicationTrackerPanel({
     onStartTailoring(application, resumeFile);
   }
 
-  async function downloadVersion(version: ResumeVersion, format: "tex" | "pdf") {
+  async function downloadVersion(version: Pick<ResumeVersion, "id" | "jobApplicationId" | "versionNumber">, format: "tex" | "pdf") {
     try {
       const blob = format === "tex"
         ? await backendApi.downloadResumeVersion(version.id)
@@ -7284,6 +7291,21 @@ function BackendApplicationTrackerPanel({
         ...current,
         [version.jobApplicationId]: error instanceof Error ? error.message : "Could not create retry job."
       }));
+    }
+  }
+
+  async function openReview(applicationId: string, version: ResumeVersion) {
+    setReviewState({ applicationId, versionId: version.id, state: "loading", message: "Loading before-and-after review..." });
+    try {
+      const review = await backendApi.getResumeVersionReview(version.id);
+      setReviewState({ applicationId, versionId: version.id, state: "ready", review });
+    } catch (error) {
+      setReviewState({
+        applicationId,
+        versionId: version.id,
+        state: "error",
+        message: error instanceof Error ? error.message : "Could not load the review screen."
+      });
     }
   }
 
@@ -7469,12 +7491,22 @@ function BackendApplicationTrackerPanel({
                 <ResumeVersionHistory
                   versions={resumeVersions[application.id] ?? []}
                   message={versionMessages[application.id]}
+                  selectedReviewVersionId={reviewState?.applicationId === application.id ? reviewState.versionId : undefined}
                   onRefresh={() => void loadVersions(application.id)}
+                  onReview={(version) => void openReview(application.id, version)}
                   onOpen={(version) => onLoadTailoredResume(application, version.id)}
                   onDownloadTex={(version) => void downloadVersion(version, "tex")}
                   onDownloadPdf={(version) => void downloadVersion(version, "pdf")}
                   onRetry={(version) => void retryVersion(version)}
                 />
+                {reviewState?.applicationId === application.id ? (
+                  <ResumeVersionReviewPanel
+                    state={reviewState}
+                    onClose={() => setReviewState(null)}
+                    onDownloadTex={() => reviewState.review && void downloadVersion(reviewState.review, "tex")}
+                    onDownloadPdf={() => reviewState.review && void downloadVersion(reviewState.review, "pdf")}
+                  />
+                ) : null}
               </article>
             );
             })
@@ -7519,7 +7551,9 @@ function BackendTextField({
 function ResumeVersionHistory({
   versions,
   message,
+  selectedReviewVersionId,
   onRefresh,
+  onReview,
   onOpen,
   onDownloadTex,
   onDownloadPdf,
@@ -7527,7 +7561,9 @@ function ResumeVersionHistory({
 }: {
   versions: ResumeVersion[];
   message?: string;
+  selectedReviewVersionId?: string;
   onRefresh: () => void;
+  onReview: (version: ResumeVersion) => void;
   onOpen: (version: ResumeVersion) => void;
   onDownloadTex: (version: ResumeVersion) => void;
   onDownloadPdf: (version: ResumeVersion) => void;
@@ -7577,6 +7613,9 @@ function ResumeVersionHistory({
                     <td className="border-b border-rule px-3 py-2 text-ink/60">{formatAvailability(version.documentAvailability)}</td>
                     <td className="border-b border-rule px-3 py-2">
                       <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={() => onReview(version)} disabled={!completed || !version.documentAvailability.tailoredTex} className={cx("border bg-white px-2 py-1 font-semibold disabled:opacity-50", selectedReviewVersionId === version.id ? "border-sage text-sage" : "border-rule text-ink/70")}>
+                          Review
+                        </button>
                         <button type="button" onClick={() => onOpen(version)} disabled={!completed || !version.documentAvailability.tailoredTex} className="border border-ink bg-white px-2 py-1 font-semibold text-ink disabled:opacity-50">
                           Open
                         </button>
@@ -7608,6 +7647,107 @@ function ResumeVersionHistory({
 
 function shortVersionId(id: string) {
   return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
+}
+
+function ResumeVersionReviewPanel({
+  state,
+  onClose,
+  onDownloadTex,
+  onDownloadPdf
+}: {
+  state: {
+    applicationId: string;
+    versionId: string;
+    state: "loading" | "ready" | "error";
+    message?: string;
+    review?: ResumeVersionReview;
+  };
+  onClose: () => void;
+  onDownloadTex: () => void;
+  onDownloadPdf: () => void;
+}) {
+  const review = state.review;
+  const diffRows = review ? diffLines(review.originalTex, review.tailoredTex) : [];
+  const changedRows = diffRows.filter((row) => row.changed);
+
+  return (
+    <div className="mt-3 border border-rule bg-white">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-rule bg-paper px-3 py-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sage">Before-and-after review</p>
+          <h4 className="mt-1 text-sm font-semibold text-ink">
+            {review ? `Version ${review.versionNumber} | ${review.baseResumeName || review.originalFileName}` : shortVersionId(state.versionId)}
+          </h4>
+          <p className="mt-1 text-xs leading-5 text-coral">
+            Review every change before applying this resume. Opening or downloading this version will not automatically overwrite your base resume.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {review ? (
+            <>
+              <button type="button" onClick={onDownloadTex} className="border border-rule bg-white px-3 py-1.5 text-xs font-semibold text-ink/70 hover:bg-paper">
+                Download .tex
+              </button>
+              <button type="button" onClick={onDownloadPdf} className="border border-rule bg-white px-3 py-1.5 text-xs font-semibold text-ink/70 hover:bg-paper">
+                Download PDF
+              </button>
+            </>
+          ) : null}
+          <button type="button" onClick={onClose} className="border border-ink bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-paper">
+            Close
+          </button>
+        </div>
+      </div>
+      {state.state === "loading" ? (
+        <p className="p-3 text-sm text-ink/60">{state.message}</p>
+      ) : state.state === "error" ? (
+        <p className="p-3 text-sm text-coral">{state.message}</p>
+      ) : review ? (
+        <div className="grid gap-3 p-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <Metric label="Before" value={formatScore(review.matchScoreBefore)} tone="gold" />
+            <Metric label="After" value={formatScore(review.matchScoreAfter)} tone="sage" />
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <ReviewCodeBlock title="Original LaTeX" source={review.originalTex} />
+            <ReviewCodeBlock title="Tailored LaTeX" source={review.tailoredTex} />
+          </div>
+          <div className="border border-rule bg-paper p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/55">Line diff</p>
+            <div className="mt-2 max-h-[360px] overflow-auto border border-rule bg-white">
+              {changedRows.length > 0 ? (
+                changedRows.map((row) => (
+                  <div key={row.line} className="grid gap-0 border-b border-rule text-xs md:grid-cols-[70px_minmax(0,1fr)_minmax(0,1fr)]">
+                    <div className="bg-paper px-2 py-1 font-mono text-ink/45">L{row.line}</div>
+                    <pre className="overflow-x-auto bg-coral/10 px-2 py-1 font-mono text-coral">{row.before || " "}</pre>
+                    <pre className="overflow-x-auto bg-sage/10 px-2 py-1 font-mono text-sage">{row.after || " "}</pre>
+                  </div>
+                ))
+              ) : (
+                <p className="p-3 text-xs text-ink/55">No line changes detected.</p>
+              )}
+            </div>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <ChipGroup title="Matched keywords" values={review.matchedKeywords} />
+            <ChipGroup title="Missing keywords" values={review.missingKeywords} danger />
+            <ChipGroup title="Sections changed" values={review.sectionsChanged} />
+            <ChipGroup title="Warnings" values={review.warnings} danger />
+            <ChipGroup title="Unsupported claims rejected" values={review.unsupportedClaimsRejected} danger />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ReviewCodeBlock({ title, source }: { title: string; source: string }) {
+  return (
+    <div className="border border-rule bg-paper">
+      <div className="border-b border-rule bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-ink/55">{title}</div>
+      <pre className="max-h-[360px] overflow-auto p-3 text-xs leading-5 text-ink/70">{source}</pre>
+    </div>
+  );
 }
 
 function formatBackendDate(value?: string) {

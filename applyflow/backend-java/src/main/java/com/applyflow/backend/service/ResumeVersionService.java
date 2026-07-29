@@ -1,6 +1,9 @@
 package com.applyflow.backend.service;
 
 import com.applyflow.backend.dto.ResumeVersionResponse;
+import com.applyflow.backend.dto.ResumeVersionReviewResponse;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.applyflow.backend.entity.ResumeVersion;
 import com.applyflow.backend.entity.TailoringStatus;
 import com.applyflow.backend.event.ResumeTailoringRequestedEvent;
@@ -11,6 +14,8 @@ import com.applyflow.backend.repository.ResumeVersionRepository;
 import java.nio.file.Path;
 import java.nio.file.Files;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
@@ -24,6 +29,8 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 @RequiredArgsConstructor
 public class ResumeVersionService {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final JobApplicationRepository jobApplicationRepository;
     private final ResumeVersionRepository resumeVersionRepository;
@@ -86,6 +93,30 @@ public class ResumeVersionService {
             throw new ResourceNotFoundException("Generated resume file was not found.");
         }
         return resource;
+    }
+
+    @Transactional(readOnly = true)
+    public ResumeVersionReviewResponse review(UUID id) {
+        var version = findEntity(id);
+        if (version.getTailoringStatus() != TailoringStatus.COMPLETED) {
+            throw new InvalidRequestException("Resume version must be completed before review.");
+        }
+        return new ResumeVersionReviewResponse(
+                version.getId(),
+                version.getJobApplicationId(),
+                version.getVersionNumber(),
+                version.getOriginalFileName(),
+                version.getBaseResumeName(),
+                readText(version.getStoredFilePath(), "Original resume source is not available."),
+                readText(version.getOutputFilePath(), "Tailored resume source is not available."),
+                version.getMatchScoreBefore(),
+                version.getMatchScoreAfter(),
+                reportStringList(version.getReportJson(), "matchedKeywords"),
+                reportStringList(version.getReportJson(), "missingKeywords"),
+                reportStringList(version.getReportJson(), "sectionsChanged"),
+                reportStringList(version.getReportJson(), "warnings"),
+                reportStringList(version.getReportJson(), "unsupportedClaimsRejected")
+        );
     }
 
     @Transactional(readOnly = true)
@@ -169,16 +200,32 @@ public class ResumeVersionService {
 
     @Transactional
     public void markCompleted(UUID id, String outputPath) {
-        markCompleted(id, outputPath, null);
+        markCompleted(id, outputPath, null, null, null);
     }
 
     @Transactional
     public void markCompleted(UUID id, String outputPath, String documentServiceId) {
+        markCompleted(id, outputPath, documentServiceId, null, null);
+    }
+
+    @Transactional
+    public void markCompleted(UUID id, String outputPath, String documentServiceId, String reportJson) {
+        markCompleted(id, outputPath, documentServiceId, reportJson, null);
+    }
+
+    @Transactional
+    public void markCompleted(UUID id, String outputPath, String documentServiceId, String reportJson, String tailoredTex) {
         var version = findEntity(id);
+        if (tailoredTex != null) {
+            writeText(outputPath, tailoredTex);
+        }
         version.setTailoringStatus(TailoringStatus.COMPLETED);
         version.setProcessingStatus(TailoringStatus.COMPLETED);
         version.setOutputFilePath(outputPath);
         version.setDocumentServiceId(documentServiceId);
+        version.setReportJson(reportJson);
+        version.setMatchScoreBefore(reportInt(reportJson, "matchScoreBefore"));
+        version.setMatchScoreAfter(reportInt(reportJson, "matchScoreAfter"));
         version.setProcessingCompletedAt(OffsetDateTime.now());
         version.setFailureMessage(null);
         version.setErrorCode(null);
@@ -210,5 +257,56 @@ public class ResumeVersionService {
 
     private Path propertiesResumesDir(UUID jobApplicationId, UUID resumeVersionId) {
         return storageService.resumeVersionDirectory(jobApplicationId, resumeVersionId);
+    }
+
+    private String readText(String path, String missingMessage) {
+        if (path == null || !Files.isReadable(Path.of(path))) {
+            throw new ResourceNotFoundException(missingMessage);
+        }
+        try {
+            return Files.readString(Path.of(path));
+        } catch (IOException exception) {
+            throw new ResourceNotFoundException(missingMessage);
+        }
+    }
+
+    private void writeText(String path, String content) {
+        try {
+            var outputPath = Path.of(path);
+            Files.createDirectories(outputPath.getParent());
+            Files.writeString(outputPath, content);
+        } catch (IOException exception) {
+            throw new InvalidRequestException("Could not store the tailored resume output.");
+        }
+    }
+
+    private Integer reportInt(String reportJson, String field) {
+        var value = reportNode(reportJson).path(field);
+        return value.isInt() ? value.asInt() : null;
+    }
+
+    private List<String> reportStringList(String reportJson, String field) {
+        var values = new ArrayList<String>();
+        var array = reportNode(reportJson).path(field);
+        if (!array.isArray()) return List.of();
+        array.forEach((item) -> {
+            if (item.isTextual()) {
+                values.add(item.asText());
+            } else {
+                values.add(item.toString());
+            }
+        });
+        return values;
+    }
+
+    private JsonNode reportNode(String reportJson) {
+        if (reportJson == null || reportJson.isBlank()) {
+            return OBJECT_MAPPER.createObjectNode();
+        }
+        try {
+            return OBJECT_MAPPER.readTree(reportJson);
+        } catch (IOException exception) {
+            return OBJECT_MAPPER.createObjectNode();
+        }
     }
 }

@@ -1,6 +1,7 @@
 package com.applyflow.backend.controller;
 
 import com.applyflow.backend.dto.ResumeVersionResponse;
+import com.applyflow.backend.dto.ResumeVersionReviewResponse;
 import com.applyflow.backend.service.ResumeVersionService;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,11 @@ public class ResumeVersionController {
     @GetMapping("/{id}")
     public ResumeVersionResponse findById(@PathVariable UUID id) {
         return service.findById(id);
+    }
+
+    @GetMapping("/{id}/review")
+    public ResumeVersionReviewResponse review(@PathVariable UUID id) {
+        return service.review(id);
     }
 
     @GetMapping("/{id}/download")

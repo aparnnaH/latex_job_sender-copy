@@ -108,6 +108,7 @@ public class AspNetDocumentServiceClient implements DocumentServiceClient {
                     body.documentId(),
                     DocumentProcessingStatus.FAILED,
                     body.tailoredTex(),
+                    body.report() == null ? null : body.report().toString(),
                     error == null ? "DOCUMENT_SERVICE_UNAVAILABLE" : error.code(),
                     error == null ? "The document service could not tailor the resume." : error.message(),
                     error != null && error.retryable());
@@ -117,6 +118,7 @@ public class AspNetDocumentServiceClient implements DocumentServiceClient {
                 body.documentId(),
                 DocumentProcessingStatus.COMPLETED,
                 body.tailoredTex(),
+                body.report() == null ? null : body.report().toString(),
                 null,
                 null,
                 false);
@@ -142,6 +144,7 @@ public class AspNetDocumentServiceClient implements DocumentServiceClient {
             UUID documentId,
             DocumentProcessingStatus status,
             String tailoredTex,
+            com.fasterxml.jackson.databind.JsonNode report,
             ContractError error
     ) {
     }

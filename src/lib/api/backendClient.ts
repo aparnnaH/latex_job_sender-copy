@@ -7,6 +7,7 @@ import type {
   JobApplicationSearchRequest,
   PageResponse,
   ResumeVersion,
+  ResumeVersionReview,
   StatusSummary
 } from "@/lib/api/models";
 
@@ -81,6 +82,10 @@ export const backendApi = {
 
   getResumeVersion(id: string) {
     return apiFetch<ResumeVersion>(`/api/resume-versions/${id}`);
+  },
+
+  getResumeVersionReview(id: string) {
+    return apiFetch<ResumeVersionReview>(`/api/resume-versions/${id}/review`);
   },
 
   downloadResumeVersion(id: string) {

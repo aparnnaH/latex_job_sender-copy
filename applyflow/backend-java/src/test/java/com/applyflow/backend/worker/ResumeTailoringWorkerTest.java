@@ -60,13 +60,19 @@ class ResumeTailoringWorkerTest {
                         documentId,
                         DocumentServiceClient.DocumentProcessingStatus.COMPLETED,
                         "\\documentclass{article}",
+                        "{\"matchScoreBefore\":20,\"matchScoreAfter\":80}",
                         null,
                         null,
                         false));
 
         worker.handle(event, message(), channel);
 
-        verify(resumeVersionService).markCompleted(event.resumeVersionId(), event.outputResumePath(), documentId.toString());
+        verify(resumeVersionService).markCompleted(
+                event.resumeVersionId(),
+                event.outputResumePath(),
+                documentId.toString(),
+                "{\"matchScoreBefore\":20,\"matchScoreAfter\":80}",
+                "\\documentclass{article}");
         verify(channel).basicAck(99L, false);
         verify(pythonTailoringClient, never()).tailor(
                 org.mockito.ArgumentMatchers.any(),
@@ -82,6 +88,7 @@ class ResumeTailoringWorkerTest {
                 .thenReturn(new DocumentServiceClient.DocumentProcessingResult(
                         UUID.randomUUID(),
                         DocumentServiceClient.DocumentProcessingStatus.FAILED,
+                        null,
                         null,
                         "DOCUMENT_SERVICE_UNAVAILABLE",
                         "The document service is temporarily unavailable.",
@@ -104,6 +111,7 @@ class ResumeTailoringWorkerTest {
                 .thenReturn(new DocumentServiceClient.DocumentProcessingResult(
                         UUID.randomUUID(),
                         DocumentServiceClient.DocumentProcessingStatus.FAILED,
+                        null,
                         null,
                         "PYTHON_RESULT_INVALID",
                         "The tailoring result was invalid.",

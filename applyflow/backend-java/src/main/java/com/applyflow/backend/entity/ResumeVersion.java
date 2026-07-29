@@ -69,6 +69,9 @@ public class ResumeVersion {
     @Column(columnDefinition = "text")
     private String safeErrorMessage;
 
+    @Column(columnDefinition = "text")
+    private String reportJson;
+
     @Column(nullable = false)
     private Integer attemptCount = 0;
 
