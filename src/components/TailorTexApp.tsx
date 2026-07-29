@@ -13,7 +13,8 @@ import {
 } from "@/lib/latex";
 import { sampleJobDescription, sampleLatexResume, sampleOverleafFiles } from "@/lib/samples";
 import { aiResponseSchema, autofillProfileSchema, jobInputSchema, latexSourceSchema } from "@/lib/schemas";
-import { localApi } from "@/lib/api";
+import { backendApi, isBackendMode, localApi } from "@/lib/api";
+import type { ApplicationStatus, JobApplication, JobApplicationRequest } from "@/lib/api";
 import type {
   AcceptedChange,
   AiResponseShape,
@@ -260,11 +261,23 @@ type SkillOrderSuggestion = {
 type EditorTab = "experience" | "skills" | "projects" | "certificates" | "education";
 type ApplicationQuickFilter = "all" | "follow-up" | "interviews" | "high-match" | "drafts" | "applied-week";
 type DensityMode = "compact" | "comfortable";
+type BackendApplicationDraft = {
+  company: string;
+  jobTitle: string;
+  jobUrl: string;
+  source: string;
+  location: string;
+  jobDescription: string;
+  status: ApplicationStatus;
+  notes: string;
+  resumeUsed: string;
+};
 
 const projectStorageKey = "tailortex.savedProject.v1";
 const tailoringSessionsStorageKey = "tailortex.namedSessions.v1";
 const applicationRecordsStorageKey = "tailortex.applicationRecords.v1";
 const autofillProfileStorageKey = "tailortex.autofillProfile.v1";
+const backendApplicationStatuses: ApplicationStatus[] = ["SAVED", "APPLIED", "INTERVIEW", "OFFER", "REJECTED", "ARCHIVED"];
 const defaultTailoringPresets: TailoringPreset[] = [
   {
     id: "preset-ai-evaluation",
@@ -1121,6 +1134,12 @@ export default function TailorTexApp() {
   const [applicationRecords, setApplicationRecords] = useState<ApplicationRecord[]>([]);
   const [applicationNotes, setApplicationNotes] = useState("");
   const [applicationStatus, setApplicationStatus] = useState<ApplicationRecord["status"]>("applied");
+  const [backendApplications, setBackendApplications] = useState<JobApplication[]>([]);
+  const [backendApplicationsStatus, setBackendApplicationsStatus] = useState<{
+    state: "idle" | "loading" | "saving" | "error";
+    message: string;
+  }>({ state: "idle", message: "" });
+  const [backendStatusFilter, setBackendStatusFilter] = useState<ApplicationStatus | "all">("all");
   const [autofillProfile, setAutofillProfile] = useState<AutofillProfile>(defaultAutofillProfile);
   const [autofillProfileReady, setAutofillProfileReady] = useState(false);
   const [copiedAnswerId, setCopiedAnswerId] = useState<string | null>(null);
@@ -1907,6 +1926,32 @@ export default function TailorTexApp() {
       cancelled = true;
     };
   }, [applyTailorTexLocalStore]);
+
+  const loadBackendApplications = useCallback(async (status = backendStatusFilter) => {
+    if (!isBackendMode()) return;
+    setBackendApplicationsStatus({ state: "loading", message: "Loading applications..." });
+    try {
+      const result = await backendApi.listApplications({
+        status: status === "all" ? undefined : status,
+        size: 100
+      });
+      setBackendApplications(result.content);
+      setBackendApplicationsStatus({
+        state: "idle",
+        message: `Loaded ${result.content.length} application${result.content.length === 1 ? "" : "s"}.`
+      });
+    } catch (error) {
+      setBackendApplicationsStatus({
+        state: "error",
+        message: error instanceof Error ? error.message : "Could not load applications."
+      });
+    }
+  }, [backendStatusFilter]);
+
+  useEffect(() => {
+    if (!isBackendMode()) return;
+    void loadBackendApplications(backendStatusFilter);
+  }, [backendStatusFilter, loadBackendApplications]);
 
   useEffect(() => {
     if (!autofillProfileReady) return;
@@ -3563,6 +3608,52 @@ export default function TailorTexApp() {
         : `Saved application record for ${job.company} ${job.title}.`
     );
     return record;
+  }
+
+  async function saveBackendApplication(draft: BackendApplicationDraft, id?: string) {
+    setBackendApplicationsStatus({ state: "saving", message: id ? "Updating application..." : "Creating application..." });
+    const request: JobApplicationRequest = {
+      company: draft.company,
+      jobTitle: draft.jobTitle,
+      jobUrl: draft.jobUrl,
+      source: draft.source,
+      location: draft.location,
+      jobDescription: draft.jobDescription,
+      notes: draft.notes,
+      resumeUsed: draft.resumeUsed
+    };
+    try {
+      const saved = id
+        ? await backendApi.replaceApplication(id, request)
+        : await backendApi.createApplication(request);
+      if (saved.status !== draft.status) {
+        await backendApi.updateApplicationStatus(saved.id, draft.status);
+      }
+      await loadBackendApplications();
+      setBackendApplicationsStatus({
+        state: "idle",
+        message: id ? "Application updated." : "Application created."
+      });
+    } catch (error) {
+      setBackendApplicationsStatus({
+        state: "error",
+        message: error instanceof Error ? error.message : "Could not save application."
+      });
+    }
+  }
+
+  function openBackendApplicationInStudio(application: JobApplication) {
+    setJob({
+      title: application.jobTitle,
+      company: application.company,
+      url: application.jobUrl ?? "",
+      description: application.jobDescription
+    });
+    setApplicationNotes(application.notes ?? "");
+    setResumeVersionLabel(application.resumeUsed ?? "");
+    setCurrentSessionName(`${application.company} ${application.jobTitle}`.trim());
+    setSelectedStep("upload");
+    setProjectStorageStatus(`Opened ${application.company} ${application.jobTitle} in the resume studio.`);
   }
 
   function loadApplicationResume(record: ApplicationRecord) {
@@ -5329,36 +5420,55 @@ export default function TailorTexApp() {
 
           {selectedStep === "applications" ? (
             <Panel title="9. Application Tracker" eyebrow="Jobs and submitted resumes">
-              <ApplicationTrackerPanel
-                records={applicationRecords}
-                notes={applicationNotes}
-                status={applicationStatus}
-                jobTitle={job.title}
-                company={job.company}
-                jobUrl={job.url}
-                matchScore={matchAnalysis.score}
-                submittedFileName={files.length > 1 ? tailoredZipFilename : tailoredTexFilename}
-                includedProjects={includedProjectNames}
-                includedCertificates={includedCertificateNames}
-                matchedSkills={matchAnalysis.matchedSkills}
-                missingRequirements={matchAnalysis.missingRequirements}
-                jobDescription={job.description}
-                generatedAnswers={generatedApplicationAnswers}
-                copiedAnswerId={copiedAnswerId}
-                duplicateRecord={duplicateApplicationRecord}
-                densityMode={densityMode}
-                onNotesChange={setApplicationNotes}
-                onStatusChange={setApplicationStatus}
-                onSave={saveApplicationRecord}
-                onApplyPacket={createApplyPacket}
-                onLoad={loadApplicationResume}
-                onDownload={downloadApplicationResume}
-                onDownloadCurrentPacket={downloadCurrentApplicationPacket}
-                onDownloadRecordPacket={downloadSavedApplicationPacket}
-                onCopy={copyToClipboard}
-                onUpdate={updateApplicationRecord}
-                onDelete={deleteApplicationRecord}
-              />
+              {isBackendMode() ? (
+                <BackendApplicationTrackerPanel
+                  applications={backendApplications}
+                  status={backendApplicationsStatus}
+                  statusFilter={backendStatusFilter}
+                  currentJob={{
+                    company: job.company,
+                    jobTitle: job.title,
+                    jobUrl: job.url,
+                    jobDescription: job.description,
+                    resumeUsed: resumeVersionName
+                  }}
+                  onStatusFilterChange={setBackendStatusFilter}
+                  onRefresh={() => void loadBackendApplications()}
+                  onSave={(draft, id) => void saveBackendApplication(draft, id)}
+                  onOpen={openBackendApplicationInStudio}
+                />
+              ) : (
+                <ApplicationTrackerPanel
+                  records={applicationRecords}
+                  notes={applicationNotes}
+                  status={applicationStatus}
+                  jobTitle={job.title}
+                  company={job.company}
+                  jobUrl={job.url}
+                  matchScore={matchAnalysis.score}
+                  submittedFileName={files.length > 1 ? tailoredZipFilename : tailoredTexFilename}
+                  includedProjects={includedProjectNames}
+                  includedCertificates={includedCertificateNames}
+                  matchedSkills={matchAnalysis.matchedSkills}
+                  missingRequirements={matchAnalysis.missingRequirements}
+                  jobDescription={job.description}
+                  generatedAnswers={generatedApplicationAnswers}
+                  copiedAnswerId={copiedAnswerId}
+                  duplicateRecord={duplicateApplicationRecord}
+                  densityMode={densityMode}
+                  onNotesChange={setApplicationNotes}
+                  onStatusChange={setApplicationStatus}
+                  onSave={saveApplicationRecord}
+                  onApplyPacket={createApplyPacket}
+                  onLoad={loadApplicationResume}
+                  onDownload={downloadApplicationResume}
+                  onDownloadCurrentPacket={downloadCurrentApplicationPacket}
+                  onDownloadRecordPacket={downloadSavedApplicationPacket}
+                  onCopy={copyToClipboard}
+                  onUpdate={updateApplicationRecord}
+                  onDelete={deleteApplicationRecord}
+                />
+              )}
             </Panel>
           ) : null}
 
@@ -6858,6 +6968,269 @@ function AutofillKitPanel({
         </div>
       </div>
     </div>
+  );
+}
+
+function emptyBackendApplicationDraft(currentJob: {
+  company: string;
+  jobTitle: string;
+  jobUrl: string;
+  jobDescription: string;
+  resumeUsed: string;
+}): BackendApplicationDraft {
+  return {
+    company: currentJob.company,
+    jobTitle: currentJob.jobTitle,
+    jobUrl: currentJob.jobUrl,
+    source: "",
+    location: "",
+    jobDescription: currentJob.jobDescription,
+    status: "SAVED",
+    notes: "",
+    resumeUsed: currentJob.resumeUsed
+  };
+}
+
+function draftFromApplication(application: JobApplication): BackendApplicationDraft {
+  return {
+    company: application.company,
+    jobTitle: application.jobTitle,
+    jobUrl: application.jobUrl ?? "",
+    source: application.source ?? "",
+    location: application.location ?? "",
+    jobDescription: application.jobDescription,
+    status: application.status,
+    notes: application.notes ?? "",
+    resumeUsed: application.resumeUsed ?? ""
+  };
+}
+
+function BackendApplicationTrackerPanel({
+  applications,
+  status,
+  statusFilter,
+  currentJob,
+  onStatusFilterChange,
+  onRefresh,
+  onSave,
+  onOpen
+}: {
+  applications: JobApplication[];
+  status: { state: "idle" | "loading" | "saving" | "error"; message: string };
+  statusFilter: ApplicationStatus | "all";
+  currentJob: {
+    company: string;
+    jobTitle: string;
+    jobUrl: string;
+    jobDescription: string;
+    resumeUsed: string;
+  };
+  onStatusFilterChange: (status: ApplicationStatus | "all") => void;
+  onRefresh: () => void;
+  onSave: (draft: BackendApplicationDraft, id?: string) => void;
+  onOpen: (application: JobApplication) => void;
+}) {
+  const [editingId, setEditingId] = useState<string | undefined>();
+  const [draft, setDraft] = useState<BackendApplicationDraft>(() => emptyBackendApplicationDraft(currentJob));
+  const isSaving = status.state === "saving";
+
+  function updateDraft(field: keyof BackendApplicationDraft, value: string) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function startCreateFromStudio() {
+    setEditingId(undefined);
+    setDraft(emptyBackendApplicationDraft(currentJob));
+  }
+
+  function startEdit(application: JobApplication) {
+    setEditingId(application.id);
+    setDraft(draftFromApplication(application));
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="border border-rule bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule bg-paper px-4 py-3">
+          <div>
+            <h3 className="text-sm font-semibold text-ink">ApplyFlow backend tracker</h3>
+            <p className="mt-1 text-xs text-ink/55">
+              Java backend mode is active. Applications are loaded from Spring Boot.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="border border-rule bg-white px-3 py-2 text-xs font-semibold text-ink/70 hover:bg-paper"
+          >
+            Refresh
+          </button>
+        </div>
+        {status.message ? (
+          <div className={cx("border-b border-rule px-4 py-2 text-sm", status.state === "error" ? "bg-coral/10 text-coral" : "bg-white text-ink/60")}>
+            {status.message}
+          </div>
+        ) : null}
+        <form
+          className="grid gap-4 p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSave(draft, editingId);
+          }}
+        >
+          <div className="grid gap-3 md:grid-cols-2">
+            <BackendTextField label="Company" value={draft.company} onChange={(value) => updateDraft("company", value)} required />
+            <BackendTextField label="Job title" value={draft.jobTitle} onChange={(value) => updateDraft("jobTitle", value)} required />
+            <BackendTextField label="Job URL" value={draft.jobUrl} onChange={(value) => updateDraft("jobUrl", value)} />
+            <BackendTextField label="Source" value={draft.source} onChange={(value) => updateDraft("source", value)} />
+            <BackendTextField label="Location" value={draft.location} onChange={(value) => updateDraft("location", value)} />
+            <BackendTextField label="Resume used" value={draft.resumeUsed} onChange={(value) => updateDraft("resumeUsed", value)} />
+            <label className="block text-sm font-semibold text-ink">
+              <span className="mb-1 block">Status</span>
+              <select
+                value={draft.status}
+                onChange={(event) => updateDraft("status", event.target.value)}
+                className="w-full border border-rule bg-paper px-3 py-2 text-sm font-normal outline-none focus:border-sage"
+              >
+                {backendApplicationStatuses.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <BackendTextArea label="Job description" value={draft.jobDescription} onChange={(value) => updateDraft("jobDescription", value)} required />
+          <BackendTextArea label="Notes" value={draft.notes} onChange={(value) => updateDraft("notes", value)} />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="border border-ink bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {editingId ? "Update application" : "Create application"}
+            </button>
+            <button
+              type="button"
+              onClick={startCreateFromStudio}
+              className="border border-rule bg-white px-4 py-2 text-sm font-semibold text-ink/70 hover:bg-paper"
+            >
+              Use current studio job
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="border border-rule bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule bg-paper px-4 py-3">
+          <div>
+            <h3 className="text-sm font-semibold text-ink">Job applications</h3>
+            <p className="mt-1 text-xs text-ink/55">Showing {applications.length} backend application{applications.length === 1 ? "" : "s"}.</p>
+          </div>
+          <label className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/60">
+            Status filter
+            <select
+              value={statusFilter}
+              onChange={(event) => onStatusFilterChange(event.target.value as ApplicationStatus | "all")}
+              className="ml-2 border border-rule bg-white px-2 py-2 text-sm normal-case tracking-normal text-ink"
+            >
+              <option value="all">All</option>
+              {backendApplicationStatuses.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="grid gap-3 p-4">
+          {applications.length > 0 ? (
+            applications.map((application) => (
+              <article key={application.id} className="border border-rule bg-paper p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sage">{application.status}</p>
+                    <h4 className="mt-1 text-sm font-semibold text-ink">
+                      {application.company} | {application.jobTitle}
+                    </h4>
+                    <p className="mt-1 text-xs text-ink/55">
+                      {[application.source, application.location, application.resumeUsed].filter(Boolean).join(" | ") || "No source, location, or resume recorded"}
+                    </p>
+                    {application.jobUrl ? (
+                      <a href={application.jobUrl} target="_blank" rel="noreferrer" className="mt-1 block truncate text-xs font-semibold text-sage underline-offset-2 hover:underline">
+                        {application.jobUrl}
+                      </a>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => onOpen(application)} className="border border-ink bg-white px-3 py-1.5 text-xs font-semibold hover:bg-paper">
+                      Open in studio
+                    </button>
+                    <button type="button" onClick={() => startEdit(application)} className="border border-sage bg-white px-3 py-1.5 text-xs font-semibold text-sage hover:bg-sage hover:text-white">
+                      Edit
+                    </button>
+                  </div>
+                </div>
+                {application.notes ? (
+                  <p className="mt-3 border border-rule bg-white p-3 text-sm leading-6 text-ink/70">{application.notes}</p>
+                ) : null}
+              </article>
+            ))
+          ) : (
+            <div className="border border-rule bg-paper p-4">
+              <p className="text-sm font-semibold text-ink">No backend applications found.</p>
+              <p className="mt-1 text-xs leading-5 text-ink/55">
+                Create one above or change the status filter.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BackendTextField({
+  label,
+  value,
+  onChange,
+  required
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+}) {
+  return (
+    <label className="block text-sm font-semibold text-ink">
+      <span className="mb-1 block">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        className="w-full border border-rule bg-paper px-3 py-2 text-sm font-normal outline-none focus:border-sage"
+      />
+    </label>
+  );
+}
+
+function BackendTextArea({
+  label,
+  value,
+  onChange,
+  required
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+}) {
+  return (
+    <label className="block text-sm font-semibold text-ink">
+      <span className="mb-1 block">{label}</span>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        className="min-h-[120px] w-full resize-y border border-rule bg-paper p-3 text-sm font-normal outline-none focus:border-sage"
+      />
+    </label>
   );
 }
 
