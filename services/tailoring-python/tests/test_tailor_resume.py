@@ -43,7 +43,8 @@ class TailorResumeTests(unittest.TestCase):
         self.assertEqual(report["sectionsChanged"], [])
         self.assertIn("python", report["matchedKeywords"])
         self.assertIn("rabbitmq", report["missingKeywords"])
-        self.assertEqual(report["unsupportedClaimsRejected"], [])
+        self.assertTrue(report["unsupportedClaimsRejected"])
+        self.assertTrue(report["suggestions"])
 
     def test_cli_copies_resume_and_writes_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -210,6 +211,64 @@ class TailorResumeTests(unittest.TestCase):
     def test_cli_reports_invalid_arguments(self) -> None:
         with redirect_stderr(StringIO()):
             self.assertEqual(main([]), EXIT_INVALID_ARGUMENTS)
+
+    def test_unsupported_skills_are_rejected_not_confirmed(self) -> None:
+        resume = (FIXTURE_DIR / "resume.tex").read_text(encoding="utf-8")
+        job = "This role requires RabbitMQ messaging and Kubernetes operations."
+
+        report = build_report(resume, job, warnings=[])
+
+        suggestion_text = json.dumps(report["suggestions"]).casefold()
+        unsupported_text = json.dumps(report["unsupportedClaimsRejected"]).casefold()
+        self.assertNotIn("approved wording about rabbitmq", suggestion_text)
+        self.assertNotIn("approved wording about kubernetes", suggestion_text)
+        self.assertIn("rabbitmq", unsupported_text)
+        self.assertIn("kubernetes", unsupported_text)
+
+    def test_evidence_file_can_support_missing_skill_without_editing_latex(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "tailored.tex"
+            report = Path(temp_dir) / "report.json"
+            evidence = Path(temp_dir) / "evidence.json"
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "skills": ["RabbitMQ"],
+                        "projects": ["Built a fictional queue monitor with RabbitMQ messaging."],
+                        "workExperience": [],
+                        "education": [],
+                        "certifications": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code = main(
+                [
+                    "--input",
+                    str(FIXTURE_DIR / "resume.tex"),
+                    "--job-description",
+                    str(FIXTURE_DIR / "job-description.txt"),
+                    "--output",
+                    str(output),
+                    "--report",
+                    str(report),
+                    "--evidence",
+                    str(evidence),
+                ]
+            )
+
+            self.assertEqual(exit_code, EXIT_SUCCESS)
+            self.assertEqual(output.read_text(encoding="utf-8"), (FIXTURE_DIR / "resume.tex").read_text(encoding="utf-8"))
+            payload = json.loads(report.read_text(encoding="utf-8"))
+            rabbitmq_suggestions = [
+                suggestion
+                for suggestion in payload["suggestions"]
+                if "rabbitmq" in json.dumps(suggestion).casefold()
+            ]
+            self.assertTrue(rabbitmq_suggestions)
+            self.assertTrue(all(suggestion["requiresUserApproval"] for suggestion in rabbitmq_suggestions))
+            self.assertNotIn("rabbitmq", json.dumps(payload["unsupportedClaimsRejected"]).casefold())
 
 
 if __name__ == "__main__":

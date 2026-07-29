@@ -16,7 +16,20 @@ python3 tailor_resume.py \
   --input input-resume.tex \
   --job-description job-description.txt \
   --output tailored-resume.tex \
-  --report tailoring-report.json
+  --report tailoring-report.json \
+  --evidence evidence.json
+```
+
+`--evidence` is optional. When provided, it must point to a JSON object with confirmed user evidence:
+
+```json
+{
+  "skills": ["Python"],
+  "projects": ["Built a fictional dashboard with React."],
+  "workExperience": ["Completed internal workflow automation work."],
+  "education": ["Coursework in SQL reporting."],
+  "certifications": []
+}
 ```
 
 ## Report Fields
@@ -29,10 +42,14 @@ The report contains:
 - `matchedKeywords`
 - `missingKeywords`
 - `sectionsChanged`
+- `suggestions`
 - `warnings`
+- `errors`
 - `unsupportedClaimsRejected`
 
-Because this skeleton does not invent edits, `matchScoreBefore` and `matchScoreAfter` are the same, `sectionsChanged` is empty, and `unsupportedClaimsRejected` is empty.
+Because this skeleton does not rewrite LaTeX, `matchScoreBefore` and `matchScoreAfter` are the same and `sectionsChanged` is empty.
+
+Suggestions are review-only. A suggestion can mention a skill as supported only when it already appears in the resume or in the optional evidence file. Unsupported recommendations are recorded in `unsupportedClaimsRejected`.
 
 ## Exit Codes
 

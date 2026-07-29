@@ -82,6 +82,7 @@ class TailoringInputs:
     job_description_path: Path
     output_path: Path
     report_path: Path
+    evidence_path: Path | None = None
 
 
 class TailoringError(Exception):
@@ -104,6 +105,10 @@ class UnsafeOutputError(TailoringError):
     """Raised when the output path would overwrite protected input."""
 
 
+class InvalidEvidenceError(TailoringError):
+    """Raised when the evidence file is not valid JSON."""
+
+
 def parse_args(argv: Sequence[str]) -> TailoringInputs:
     parser = argparse.ArgumentParser(
         description="Create a deterministic TailorTeX report and copy the resume unchanged."
@@ -112,6 +117,7 @@ def parse_args(argv: Sequence[str]) -> TailoringInputs:
     parser.add_argument("--job-description", required=True, help="Path to a text job description.")
     parser.add_argument("--output", required=True, help="Path where the tailored LaTeX resume should be written.")
     parser.add_argument("--report", required=True, help="Path where the JSON tailoring report should be written.")
+    parser.add_argument("--evidence", help="Optional JSON file with confirmed user evidence.")
     namespace = parser.parse_args(argv)
 
     return TailoringInputs(
@@ -119,6 +125,7 @@ def parse_args(argv: Sequence[str]) -> TailoringInputs:
         job_description_path=Path(namespace.job_description),
         output_path=Path(namespace.output),
         report_path=Path(namespace.report),
+        evidence_path=Path(namespace.evidence) if namespace.evidence else None,
     )
 
 
@@ -204,11 +211,137 @@ def extract_basic_job_keywords(job_description: str) -> list[str]:
     return sorted(keywords)
 
 
+def extract_important_phrases(job_description: str) -> list[str]:
+    phrases: list[str] = []
+    patterns = [
+        r"\b(?:internal|customer|developer|data|workflow|reporting|automation|accessibility)\s+[a-zA-Z][a-zA-Z.+/#-]+",
+        r"\b[a-zA-Z][a-zA-Z.+/#-]+\s+(?:tools|systems|dashboards|interfaces|pipelines|practices|quality)",
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, job_description, flags=re.IGNORECASE):
+            phrase = normalize_text(match).strip()
+            if phrase and phrase not in phrases:
+                phrases.append(phrase)
+    return sorted(phrases)
+
+
 def compare_keywords(resume_source: str, keywords: Sequence[str]) -> tuple[list[str], list[str]]:
     normalized_resume = normalize_text(resume_source)
     matched = [keyword for keyword in keywords if keyword in normalized_resume]
     missing = [keyword for keyword in keywords if keyword not in normalized_resume]
     return matched, missing
+
+
+def load_evidence(evidence_path: Path | None) -> dict[str, list[str]]:
+    categories = ("skills", "projects", "workExperience", "education", "certifications")
+    if evidence_path is None:
+        return {category: [] for category in categories}
+    if not evidence_path.exists():
+        raise MissingInputError(f"Evidence file was not found: {evidence_path}")
+    try:
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise InvalidEvidenceError(f"Evidence file is not valid JSON: {error.msg}.") from error
+    if not isinstance(payload, dict):
+        raise InvalidEvidenceError("Evidence file must contain a JSON object.")
+
+    evidence: dict[str, list[str]] = {}
+    for category in categories:
+        value = payload.get(category, [])
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise InvalidEvidenceError(f"Evidence field '{category}' must be an array of strings.")
+        evidence[category] = value
+    return evidence
+
+
+def evidence_text(evidence: dict[str, list[str]]) -> str:
+    return "\n".join(item for values in evidence.values() for item in values)
+
+
+def evidence_sources_for(term: str, resume_source: str, evidence: dict[str, list[str]]) -> list[str]:
+    sources: list[str] = []
+    normalized_term = normalize_text(term)
+    if normalized_term in normalize_text(resume_source):
+        sources.append("resume")
+    for category, values in evidence.items():
+        if any(normalized_term in normalize_text(value) for value in values):
+            sources.append(f"evidence.{category}")
+    return sources
+
+
+def infer_review_section(term: str) -> str:
+    if term in KNOWN_TECH_TERMS:
+        return "Skills"
+    if any(marker in term for marker in ("project", "dashboard", "tool", "pipeline", "interface")):
+        return "Projects"
+    if any(marker in term for marker in ("degree", "education", "course")):
+        return "Education"
+    if "cert" in term:
+        return "Certifications"
+    return "Experience"
+
+
+def generate_suggestions(
+    resume_source: str,
+    job_keywords: Sequence[str],
+    important_phrases: Sequence[str],
+    matched_keywords: Sequence[str],
+    missing_keywords: Sequence[str],
+    evidence: dict[str, list[str]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    suggestions: list[dict[str, object]] = []
+    unsupported: list[dict[str, object]] = []
+
+    for keyword in matched_keywords:
+        sources = evidence_sources_for(keyword, resume_source, evidence)
+        suggestions.append(
+            {
+                "section": infer_review_section(keyword),
+                "reason": f"Existing matching evidence for '{keyword}' appears in {', '.join(sources)}.",
+                "proposedWording": f"Review existing wording that already mentions {keyword}.",
+                "evidenceSource": sources,
+                "confidence": "HIGH" if "resume" in sources else "MEDIUM",
+                "requiresUserApproval": True,
+            }
+        )
+
+    combined_evidence = f"{resume_source}\n{evidence_text(evidence)}"
+    for keyword in missing_keywords:
+        sources = evidence_sources_for(keyword, resume_source, evidence)
+        if sources:
+            suggestions.append(
+                {
+                    "section": infer_review_section(keyword),
+                    "reason": f"Job requirement '{keyword}' is not in the resume text but is confirmed by evidence.",
+                    "proposedWording": f"Consider adding approved wording about {keyword}.",
+                    "evidenceSource": sources,
+                    "confidence": "MEDIUM",
+                    "requiresUserApproval": True,
+                }
+            )
+        else:
+            unsupported.append(
+                {
+                    "requirement": keyword,
+                    "reason": "Requirement appears in the job description but was not found in the resume or evidence file.",
+                    "evidenceSource": [],
+                    "rejectedProposedWording": f"Add {keyword} to the resume.",
+                }
+            )
+
+    for phrase in important_phrases:
+        if phrase in normalize_text(combined_evidence):
+            continue
+        unsupported.append(
+            {
+                "requirement": phrase,
+                "reason": "Important phrase is unsupported by the resume and evidence file.",
+                "evidenceSource": [],
+                "rejectedProposedWording": f"Claim experience with {phrase}.",
+            }
+        )
+
+    return suggestions, unsupported
 
 
 def calculate_match_score(matched_keywords: Sequence[str], all_keywords: Sequence[str]) -> int:
@@ -217,21 +350,39 @@ def calculate_match_score(matched_keywords: Sequence[str], all_keywords: Sequenc
     return round((len(matched_keywords) / len(all_keywords)) * 100)
 
 
-def build_report(resume_source: str, job_description: str, warnings: Sequence[str]) -> dict[str, object]:
+def build_report(
+    resume_source: str,
+    job_description: str,
+    warnings: Sequence[str],
+    evidence: dict[str, list[str]] | None = None,
+) -> dict[str, object]:
+    evidence = evidence or load_evidence(None)
     keywords = extract_basic_job_keywords(job_description)
+    important_phrases = extract_important_phrases(job_description)
     matched_keywords, missing_keywords = compare_keywords(resume_source, keywords)
     match_score = calculate_match_score(matched_keywords, keywords)
+    suggestions, unsupported_claims_rejected = generate_suggestions(
+        resume_source,
+        keywords,
+        important_phrases,
+        matched_keywords,
+        missing_keywords,
+        evidence,
+    )
 
     return {
         "status": "COMPLETED",
         "matchScoreBefore": match_score,
         "matchScoreAfter": match_score,
+        "jobKeywords": keywords,
+        "importantPhrases": important_phrases,
         "matchedKeywords": matched_keywords,
         "missingKeywords": missing_keywords,
         "sectionsChanged": [],
+        "suggestions": suggestions,
         "warnings": list(warnings),
         "errors": [],
-        "unsupportedClaimsRejected": [],
+        "unsupportedClaimsRejected": unsupported_claims_rejected,
     }
 
 
@@ -244,6 +395,7 @@ def write_failure_report(report_path: Path, message: str) -> None:
         "matchedKeywords": [],
         "missingKeywords": [],
         "sectionsChanged": [],
+        "suggestions": [],
         "warnings": [],
         "errors": [message],
         "unsupportedClaimsRejected": [],
@@ -287,12 +439,13 @@ def run_tailoring(inputs: TailoringInputs) -> dict[str, object]:
     assert_safe_output_path(inputs.input_path, inputs.output_path)
     resume_source = read_required_text(inputs.input_path, "Input resume")
     job_description = read_required_text(inputs.job_description_path, "Job description")
+    evidence = load_evidence(inputs.evidence_path)
     warnings = validate_latex(resume_source)
 
     inputs.report_path.parent.mkdir(parents=True, exist_ok=True)
     write_output_atomically(inputs.output_path, resume_source)
 
-    report = build_report(resume_source, job_description, warnings)
+    report = build_report(resume_source, job_description, warnings, evidence)
     inputs.report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
 
