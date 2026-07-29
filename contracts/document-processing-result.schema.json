@@ -1,0 +1,206 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tailortex.local/contracts/document-processing-result.schema.json",
+  "title": "DocumentProcessingResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requestId",
+    "applicationId",
+    "resumeVersionId",
+    "status",
+    "artifacts",
+    "report"
+  ],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "applicationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "resumeVersionId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "COMPLETED",
+        "FAILED"
+      ]
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tailoredTexPath",
+        "reportJsonPath"
+      ],
+      "properties": {
+        "tailoredTexPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reportJsonPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compiledPdfPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compilerLogPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "matchScore",
+        "matchedSkills",
+        "missingRequirements",
+        "suggestions",
+        "unsupportedClaims",
+        "summary"
+      ],
+      "properties": {
+        "matchScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "matchedSkills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "missingRequirements": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "target",
+              "original",
+              "replacement",
+              "reason",
+              "confidence"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "fileName",
+                  "line"
+                ],
+                "properties": {
+                  "fileName": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "section": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "original": {
+                "type": "string"
+              },
+              "replacement": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "string",
+                "enum": [
+                  "HIGH",
+                  "MEDIUM",
+                  "LOW"
+                ]
+              }
+            }
+          }
+        },
+        "unsupportedClaims": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    }
+  },
+  "$defs": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "internalDetails": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

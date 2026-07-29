@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tailortex.local/contracts/document-processing-request.schema.json",
+  "title": "DocumentProcessingRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requestId",
+    "applicationId",
+    "resumeVersionId",
+    "job",
+    "input",
+    "processing"
+  ],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Stable idempotency key for this document-processing request."
+    },
+    "applicationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "resumeVersionId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "company",
+        "title",
+        "description"
+      ],
+      "properties": {
+        "company": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resumeTexPath",
+        "outputDirectory"
+      ],
+      "properties": {
+        "resumeTexPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to the source .tex file accessible to the ASP.NET document service."
+        },
+        "projectRootPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional path to a LaTeX project directory containing supporting files."
+        },
+        "outputDirectory": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Directory where tailored .tex, report JSON, logs, and compiled PDF should be written."
+        },
+        "sourceFileName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": "main.tex"
+        }
+      }
+    },
+    "processing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compilePdf",
+        "maxUploadBytes",
+        "timeoutSeconds"
+      ],
+      "properties": {
+        "compilePdf": {
+          "type": "boolean"
+        },
+        "maxUploadBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pythonExecutable": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pythonScriptPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tectonicPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}
