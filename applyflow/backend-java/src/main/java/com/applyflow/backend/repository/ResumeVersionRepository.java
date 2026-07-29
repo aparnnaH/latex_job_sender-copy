@@ -11,9 +11,11 @@ import org.springframework.data.repository.query.Param;
 
 public interface ResumeVersionRepository extends JpaRepository<ResumeVersion, UUID> {
 
-    long countByJobApplicationId(UUID jobApplicationId);
+    long countByJobApplicationIdAndOwnerUserId(UUID jobApplicationId, String ownerUserId);
 
-    List<ResumeVersion> findByJobApplicationIdOrderByVersionNumberDesc(UUID jobApplicationId);
+    List<ResumeVersion> findByJobApplicationIdAndOwnerUserIdOrderByVersionNumberDesc(UUID jobApplicationId, String ownerUserId);
+
+    java.util.Optional<ResumeVersion> findByIdAndOwnerUserId(UUID id, String ownerUserId);
 
     @Modifying
     @Query("""
@@ -25,10 +27,11 @@ public interface ResumeVersionRepository extends JpaRepository<ResumeVersion, UU
                 rv.failureMessage = null,
                 rv.errorCode = null,
                 rv.safeErrorMessage = null
-            where rv.id = :id and rv.tailoringStatus = :expectedStatus
+            where rv.id = :id and rv.ownerUserId = :ownerUserId and rv.tailoringStatus = :expectedStatus
             """)
     int transitionStatus(
             @Param("id") UUID id,
+            @Param("ownerUserId") String ownerUserId,
             @Param("expectedStatus") TailoringStatus expectedStatus,
             @Param("nextStatus") TailoringStatus nextStatus);
 }

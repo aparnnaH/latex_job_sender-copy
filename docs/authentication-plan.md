@@ -36,6 +36,16 @@ The current `src/lib/api/http.ts` client can later be extended to include creden
 
 Spring Boot should validate every request that touches persisted data or stored files.
 
+Current foundation:
+
+- Authentication is still disabled.
+- Java resolves ownership through `CurrentUserProvider`.
+- The default `DevelopmentCurrentUserProvider` returns `applyflow.auth.development-user-id`, falling back to `development-user`.
+- The ASP.NET document API resolves ownership through `ICurrentUserProvider`.
+- The default ASP.NET provider returns `DocumentProcessing:DevelopmentUserId`, falling back to `development-user`.
+- Real authentication should replace these provider implementations with token-backed identity resolvers. Service and repository method signatures should keep accepting owner context derived by the backend, not by request bodies.
+- Existing file-backed ASP.NET document records can be backfilled with `api/scripts/backfill-document-owner-user-id.sh [storageRoot] [ownerUserId]`.
+
 Recommended implementation:
 
 - Configure Spring Security as an OAuth2 resource server.
@@ -204,4 +214,3 @@ Recommended mitigations:
 - Encrypt storage volumes or object buckets where feasible.
 - Add artifact retention controls and user deletion support.
 - Treat LLM inputs and outputs as sensitive data and avoid sending them to providers without explicit product/privacy review.
-

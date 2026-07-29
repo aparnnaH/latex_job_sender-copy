@@ -1,0 +1,129 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  python-tailoring:
+    build:
+      context: ./services/tailoring-python
+    ports:
+      - "${PYTHON_TAILORING_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  document-service:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      DocumentProcessing__StorageRoot: /data/documents
+      DocumentProcessing__MaxUploadBytes: ${DOCUMENT_MAX_UPLOAD_BYTES:-1048576}
+      DocumentProcessing__DevelopmentUserId: ${DOCUMENT_DEVELOPMENT_USER_ID:-development-user}
+      PythonService__UseMock: ${PYTHON_SERVICE_USE_MOCK:-false}
+      PythonService__BaseUrl: http://python-tailoring:8000
+      PythonService__ConnectTimeoutSeconds: ${PYTHON_SERVICE_CONNECT_TIMEOUT_SECONDS:-5}
+      PythonService__RequestTimeoutSeconds: ${PYTHON_SERVICE_REQUEST_TIMEOUT_SECONDS:-30}
+      PythonService__RetryAttempts: ${PYTHON_SERVICE_RETRY_ATTEMPTS:-2}
+      Tectonic__ExecutablePath: ${TECTONIC_EXECUTABLE_PATH:-tectonic}
+      Tectonic__TimeoutSeconds: ${TECTONIC_TIMEOUT_SECONDS:-45}
+    ports:
+      - "${DOCUMENT_SERVICE_PORT:-5000}:8080"
+    volumes:
+      - document-storage:/data/documents
+    depends_on:
+      python-tailoring:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  java-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.java
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+      APPLYFLOW_DEVELOPMENT_USER_ID: ${APPLYFLOW_DEVELOPMENT_USER_ID:-development-user}
+      APPLYFLOW_RESUME_STORAGE_DIR: /data/resumes
+      APPLYFLOW_MAX_UPLOAD_BYTES: ${APPLYFLOW_MAX_UPLOAD_BYTES:-1048576}
+      APPLYFLOW_DOCUMENT_SERVICE_URL: http://document-service:8080
+      APPLYFLOW_DOCUMENT_SERVICE_TIMEOUT: ${APPLYFLOW_DOCUMENT_SERVICE_TIMEOUT:-PT60S}
+      APPLYFLOW_DOCUMENT_SERVICE_PYTHON_FALLBACK_ENABLED: "false"
+      APPLYFLOW_DOCUMENT_SERVICE_COMPILE_PDF: ${APPLYFLOW_DOCUMENT_SERVICE_COMPILE_PDF:-true}
+      PYTHON_EXECUTABLE: python3
+      PYTHON_TAILORING_SCRIPT_PATH: ../resume-tailor-python/tailor_resume.py
+      PYTHON_TAILORING_TIMEOUT: ${PYTHON_TAILORING_TIMEOUT:-PT60S}
+      APPLYFLOW_TAILORING_RETRY_ATTEMPTS: ${APPLYFLOW_TAILORING_RETRY_ATTEMPTS:-3}
+      APPLYFLOW_RABBITMQ_EXCHANGE: ${APPLYFLOW_RABBITMQ_EXCHANGE:-applyflow.resume-tailoring}
+      APPLYFLOW_RABBITMQ_QUEUE: ${APPLYFLOW_RABBITMQ_QUEUE:-applyflow.resume-tailoring.requests}
+      APPLYFLOW_RABBITMQ_ROUTING_KEY: ${APPLYFLOW_RABBITMQ_ROUTING_KEY:-resume.tailoring.requested}
+      APPLYFLOW_RABBITMQ_DLX: ${APPLYFLOW_RABBITMQ_DLX:-applyflow.resume-tailoring.dlx}
+      APPLYFLOW_RABBITMQ_DLQ: ${APPLYFLOW_RABBITMQ_DLQ:-applyflow.resume-tailoring.dead}
+    ports:
+      - "${JAVA_API_PORT:-8080}:8080"
+    volumes:
+      - resume-storage:/data/resumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      document-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/actuator/health/liveness"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  document-storage:
+  resume-storage:

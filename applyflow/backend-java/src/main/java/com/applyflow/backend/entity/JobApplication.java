@@ -25,6 +25,9 @@ public class JobApplication {
     private UUID id;
 
     @Column(nullable = false)
+    private String ownerUserId;
+
+    @Column(nullable = false)
     private String company;
 
     @Column(nullable = false)

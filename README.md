@@ -2,6 +2,73 @@
 
 AI-assisted LaTeX resume tailoring.
 
+## Local Docker Compose
+
+The root `docker-compose.yml` starts the local backend stack:
+
+- PostgreSQL
+- RabbitMQ with the management UI
+- Python tailoring service
+- ASP.NET Core document service
+- Java Spring Boot API and worker
+
+The Next.js frontend is intentionally not containerized so normal Mac development stays simple.
+
+Set up local environment values:
+
+```sh
+cp .env.example .env
+```
+
+Edit `.env` and replace the placeholder database and RabbitMQ passwords with local development values. Do not commit `.env`.
+
+Start the backend stack:
+
+```sh
+docker compose up --build
+```
+
+Useful URLs:
+
+```text
+Java API:               http://localhost:8080
+Java health:            http://localhost:8080/actuator/health
+ASP.NET document API:   http://localhost:5000
+Document health:        http://localhost:5000/health
+Python tailoring:       http://localhost:8000/health
+RabbitMQ management:    http://localhost:15672
+PostgreSQL:             localhost:5432
+```
+
+Container networking is already wired:
+
+```text
+Java -> PostgreSQL:        jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+Java -> RabbitMQ:          rabbitmq:5672
+Java -> document service:  http://document-service:8080
+Document -> Python:        http://python-tailoring:8000
+```
+
+Run the frontend separately when you want the browser app:
+
+```sh
+npm run dev
+```
+
+Keep `NEXT_PUBLIC_JAVA_API_BASE_URL=http://localhost:8080` and set `NEXT_PUBLIC_TAILORTEX_API_MODE=backend` in `.env` when using the Java API from Next.js.
+
+Stop the stack:
+
+```sh
+docker compose down
+```
+
+PostgreSQL, RabbitMQ, uploaded resumes, and file-backed document records use named Docker volumes. To remove local development data too:
+
+```sh
+docker compose down -v
+```
+
 ## ApplyFlow
 
 The first Java/Spring Boot backend step now lives in `applyflow/`.
@@ -12,18 +79,13 @@ See `applyflow/README.md` for setup and test commands.
 
 This repository now includes a separate ASP.NET Core Web API in `api/`.
 
-The current workspace does not contain a Python tailoring script, so configure the API to point at the existing Python entry point before running it. The API calls Python with three positional arguments:
+Standalone API runs are still supported. Configure these values in `api/appsettings.json` or environment variables:
 
 ```sh
-python3 path/to/script.py input-resume.tex "job description text" output-resume.tex
-```
-
-Configure these values in `api/appsettings.json` or environment variables:
-
-```sh
-PythonTailoring__PythonExecutable=python3
-PythonTailoring__ScriptPath=../tailor_resume.py
-PythonTailoring__MaxUploadBytes=1048576
+DocumentProcessing__StorageRoot=/tmp/tailortex-documents
+PythonService__UseMock=false
+PythonService__BaseUrl=http://127.0.0.1:8000
+Tectonic__ExecutablePath=tectonic
 ```
 
 Run the API:

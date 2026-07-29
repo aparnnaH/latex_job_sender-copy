@@ -49,13 +49,26 @@ public sealed class DocumentFoundationTests
         using var tempRoot = new TempDirectory();
         var storage = CreateStorage(tempRoot.Path);
 
-        var document = await storage.CreateAsync("../resume.tex", "\\documentclass{article}", CancellationToken.None);
+        var document = await storage.CreateAsync("development-user-a", "../resume.tex", "\\documentclass{article}", CancellationToken.None);
         var directory = storage.GetSafeDocumentDirectory(document.Id);
 
         Assert.Equal("resume.tex", document.OriginalFileName);
+        Assert.Equal("development-user-a", document.OwnerUserId);
         Assert.StartsWith(tempRoot.Path, directory, StringComparison.Ordinal);
         Assert.DoesNotContain("..", System.IO.Path.GetRelativePath(tempRoot.Path, directory));
         Assert.True(Guid.TryParse(document.Id.ToString(), out _));
+    }
+
+    [Fact]
+    public async Task LocalStorageDoesNotReturnAnotherDevelopmentUsersDocument()
+    {
+        using var tempRoot = new TempDirectory();
+        var storage = CreateStorage(tempRoot.Path);
+        var document = await storage.CreateAsync("development-user-a", "resume.tex", "\\documentclass{article}", CancellationToken.None);
+
+        var found = await storage.FindAsync(document.Id, "development-user-b", CancellationToken.None);
+
+        Assert.Null(found);
     }
 
     [Fact]
@@ -156,7 +169,7 @@ public sealed class DocumentFoundationTests
     {
         using var tempRoot = new TempDirectory();
         var storage = CreateStorage(tempRoot.Path);
-        var document = await storage.CreateAsync("resume.tex", "\\documentclass{article}", CancellationToken.None);
+        var document = await storage.CreateAsync("development-user-a", "resume.tex", "\\documentclass{article}", CancellationToken.None);
         var runner = new FakeCompilerProcessRunner((_, _, workingDirectory, _, _) =>
         {
             var outDir = System.IO.Path.Combine(workingDirectory, "out");
@@ -180,7 +193,7 @@ public sealed class DocumentFoundationTests
     {
         using var tempRoot = new TempDirectory();
         var storage = CreateStorage(tempRoot.Path);
-        var document = await storage.CreateAsync("resume.tex", "\\documentclass{article}", CancellationToken.None);
+        var document = await storage.CreateAsync("development-user-a", "resume.tex", "\\documentclass{article}", CancellationToken.None);
         var runner = new FakeCompilerProcessRunner((_, _, _, _, _) =>
             Task.FromResult(new CompilerProcessResult(-1, "", "timeout", TimedOut: true)));
         var compiler = CreateCompiler(storage, runner);
@@ -198,7 +211,7 @@ public sealed class DocumentFoundationTests
     {
         using var tempRoot = new TempDirectory();
         var storage = CreateStorage(tempRoot.Path);
-        var document = await storage.CreateAsync("resume.tex", "\\documentclass{article}", CancellationToken.None);
+        var document = await storage.CreateAsync("development-user-a", "resume.tex", "\\documentclass{article}", CancellationToken.None);
         var runner = new FakeCompilerProcessRunner((_, _, _, _, _) =>
             Task.FromResult(new CompilerProcessResult(1, "", "Undefined control sequence", TimedOut: false)));
         var compiler = CreateCompiler(storage, runner);
@@ -218,6 +231,7 @@ public sealed class DocumentFoundationTests
         var storage = CreateStorage(tempRoot.Path);
         var document = new StoredDocument(
             Guid.NewGuid(),
+            "development-user-a",
             DocumentStatus.PENDING,
             "resume.tex",
             "",

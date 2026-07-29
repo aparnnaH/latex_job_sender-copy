@@ -22,10 +22,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class JobApplicationService {
 
     private final JobApplicationRepository repository;
+    private final CurrentUserProvider currentUserProvider;
 
     @Transactional
     public JobApplicationResponse create(JobApplicationRequest request) {
         var application = new JobApplication();
+        application.setOwnerUserId(currentUserId());
         applyRequest(application, request);
         application.setStatus(JobApplicationStatus.SAVED);
         return toResponse(repository.save(application));
@@ -34,7 +36,7 @@ public class JobApplicationService {
     @Transactional(readOnly = true)
     public Page<JobApplicationResponse> findAll(JobApplicationSearchRequest search, Pageable pageable) {
         return repository.findAll(toSpecification(search), pageable)
-                .map(this::toResponse)
+                .map(this::toResponse);
     }
 
     @Transactional(readOnly = true)
@@ -65,15 +67,19 @@ public class JobApplicationService {
 
     @Transactional
     public void delete(UUID id) {
-        if (!repository.existsById(id)) {
+        if (!repository.existsByIdAndOwnerUserId(id, currentUserId())) {
             throw new ResourceNotFoundException("Job application not found: " + id);
         }
         repository.deleteById(id);
     }
 
     private JobApplication findEntity(UUID id) {
-        return repository.findById(id)
+        return repository.findByIdAndOwnerUserId(id, currentUserId())
                 .orElseThrow(() -> new ResourceNotFoundException("Job application not found: " + id));
+    }
+
+    private String currentUserId() {
+        return currentUserProvider.currentUserId();
     }
 
     private void applyRequest(JobApplication application, JobApplicationRequest request) {
@@ -132,7 +138,8 @@ public class JobApplicationService {
     }
 
     private Specification<JobApplication> toSpecification(JobApplicationSearchRequest search) {
-        Specification<JobApplication> specification = Specification.where(null);
+        Specification<JobApplication> specification = (root, query, builder) ->
+                builder.equal(root.get("ownerUserId"), currentUserId());
 
         if (search.status() != null) {
             specification = specification.and((root, query, builder) ->

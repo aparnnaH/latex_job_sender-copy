@@ -36,10 +36,12 @@ class JobApplicationServiceTest {
     private JobApplicationRepository repository;
 
     private JobApplicationService service;
+    private String currentUserId;
 
     @BeforeEach
     void setUp() {
-        service = new JobApplicationService(repository);
+        currentUserId = "development-user-a";
+        service = new JobApplicationService(repository, () -> currentUserId);
     }
 
     @Test
@@ -69,6 +71,7 @@ class JobApplicationServiceTest {
 
         ArgumentCaptor<JobApplication> captor = ArgumentCaptor.forClass(JobApplication.class);
         verify(repository).save(captor.capture());
+        assertThat(captor.getValue().getOwnerUserId()).isEqualTo("development-user-a");
         assertThat(captor.getValue().getJobTitle()).isEqualTo("Backend Engineer");
         assertThat(captor.getValue().getLocation()).isEqualTo("Toronto, ON");
     }
@@ -77,13 +80,22 @@ class JobApplicationServiceTest {
     void updateStatusChangesOnlyStatus() {
         var id = UUID.randomUUID();
         var existing = application(id);
-        when(repository.findById(id)).thenReturn(Optional.of(existing));
+        when(repository.findByIdAndOwnerUserId(id, "development-user-a")).thenReturn(Optional.of(existing));
         when(repository.save(existing)).thenAnswer(invocation -> invocation.getArgument(0));
 
         var response = service.updateStatus(id, JobApplicationStatus.INTERVIEW);
 
         assertThat(response.status()).isEqualTo(JobApplicationStatus.INTERVIEW);
         assertThat(response.company()).isEqualTo("Acme");
+    }
+
+    @Test
+    void findByIdDoesNotReturnAnotherDevelopmentUsersApplication() {
+        var id = UUID.randomUUID();
+        when(repository.findByIdAndOwnerUserId(id, "development-user-a")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.findById(id))
+                .isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test
@@ -108,7 +120,7 @@ class JobApplicationServiceTest {
     void patchUpdatesOnlyProvidedFields() {
         var id = UUID.randomUUID();
         var existing = application(id);
-        when(repository.findById(id)).thenReturn(Optional.of(existing));
+        when(repository.findByIdAndOwnerUserId(id, "development-user-a")).thenReturn(Optional.of(existing));
         when(repository.save(existing)).thenAnswer(invocation -> invocation.getArgument(0));
 
         var response = service.patch(id, new JobApplicationPatchRequest(
@@ -132,7 +144,7 @@ class JobApplicationServiceTest {
     @Test
     void patchRejectsBlankRequiredFields() {
         var id = UUID.randomUUID();
-        when(repository.findById(id)).thenReturn(Optional.of(application(id)));
+        when(repository.findByIdAndOwnerUserId(id, "development-user-a")).thenReturn(Optional.of(application(id)));
 
         assertThatThrownBy(() -> service.patch(id, new JobApplicationPatchRequest(
                 "",
@@ -152,7 +164,7 @@ class JobApplicationServiceTest {
     @Test
     void findByIdThrowsWhenMissing() {
         var id = UUID.randomUUID();
-        when(repository.findById(id)).thenReturn(Optional.empty());
+        when(repository.findByIdAndOwnerUserId(id, "development-user-a")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.findById(id))
                 .isInstanceOf(ResourceNotFoundException.class)
@@ -162,7 +174,7 @@ class JobApplicationServiceTest {
     @Test
     void deleteThrowsWhenMissing() {
         var id = UUID.randomUUID();
-        when(repository.existsById(id)).thenReturn(false);
+        when(repository.existsByIdAndOwnerUserId(id, "development-user-a")).thenReturn(false);
 
         assertThatThrownBy(() -> service.delete(id))
                 .isInstanceOf(ResourceNotFoundException.class);
@@ -178,6 +190,7 @@ class JobApplicationServiceTest {
     private JobApplication application(UUID id) {
         var application = new JobApplication();
         application.setId(id);
+        application.setOwnerUserId("development-user-a");
         application.setCompany("Acme");
         application.setJobTitle("Backend Engineer");
         application.setJobDescription("Build Spring services");

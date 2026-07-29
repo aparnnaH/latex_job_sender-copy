@@ -14,6 +14,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 builder.Services.AddSingleton<IDocumentStorage, LocalFileDocumentStorage>();
+builder.Services.AddSingleton<ICurrentUserProvider, DevelopmentCurrentUserProvider>();
 builder.Services.AddSingleton<ICompilerProcessRunner, SystemCompilerProcessRunner>();
 builder.Services.AddSingleton<ITectonicCompiler, TectonicCompiler>();
 
@@ -46,6 +47,7 @@ app.MapGet("/openapi.json", () => Results.Json(OpenApiDocumentFactory.Create()))
 app.MapPost("/api/documents/tailor", async (
     HttpRequest request,
     IDocumentStorage storage,
+    ICurrentUserProvider currentUserProvider,
     IPythonTailoringClient pythonTailoringClient,
     CancellationToken cancellationToken) =>
 {
@@ -56,7 +58,8 @@ app.MapPost("/api/documents/tailor", async (
     }
 
     var command = validation.Command!;
-    var document = await storage.CreateAsync(command.ResumeFileName, command.ResumeContent, cancellationToken);
+    var ownerUserId = currentUserProvider.CurrentUserId;
+    var document = await storage.CreateAsync(ownerUserId, command.ResumeFileName, command.ResumeContent, cancellationToken);
     var result = await pythonTailoringClient.TailorAsync(
         new PythonTailoringRequest(document.Id, document.OriginalTexContent, command.JobDescription, command.Evidence),
         cancellationToken);
@@ -77,6 +80,7 @@ app.MapPost("/api/documents/tailor", async (
 app.MapPost("/api/documents/compile", async (
     CompileDocumentRequest request,
     IDocumentStorage storage,
+    ICurrentUserProvider currentUserProvider,
     ITectonicCompiler compiler,
     CancellationToken cancellationToken) =>
 {
@@ -85,7 +89,7 @@ app.MapPost("/api/documents/compile", async (
         return ApiResults.Error(Errors.ValidationFailed("documentId is required."), StatusCodes.Status400BadRequest);
     }
 
-    var document = await storage.FindAsync(request.DocumentId, cancellationToken);
+    var document = await storage.FindAsync(request.DocumentId, currentUserProvider.CurrentUserId, cancellationToken);
     if (document is null)
     {
         return ApiResults.Error(Errors.NotFound("Document was not found."), StatusCodes.Status404NotFound);
@@ -108,6 +112,7 @@ app.MapPost("/api/documents/compile", async (
 app.MapGet("/api/documents/{id}", async (
     string id,
     IDocumentStorage storage,
+    ICurrentUserProvider currentUserProvider,
     CancellationToken cancellationToken) =>
 {
     if (!Guid.TryParse(id, out var documentId))
@@ -115,7 +120,7 @@ app.MapGet("/api/documents/{id}", async (
         return ApiResults.Error(Errors.ValidationFailed("Document id must be a UUID."), StatusCodes.Status400BadRequest);
     }
 
-    var document = await storage.FindAsync(documentId, cancellationToken);
+    var document = await storage.FindAsync(documentId, currentUserProvider.CurrentUserId, cancellationToken);
     if (document is null)
     {
         return ApiResults.Error(Errors.NotFound("Document was not found."), StatusCodes.Status404NotFound);
@@ -201,6 +206,7 @@ public sealed record DocumentProcessingOptions
 
     public string StorageRoot { get; init; } = Path.Combine(Path.GetTempPath(), "tailortex-documents");
     public long MaxUploadBytes { get; init; } = 1_048_576;
+    public string DevelopmentUserId { get; init; } = "development-user";
 }
 
 public sealed record PythonServiceOptions
@@ -224,6 +230,7 @@ public sealed record TectonicOptions
 
 public sealed record StoredDocument(
     Guid Id,
+    string OwnerUserId,
     DocumentStatus Status,
     string OriginalFileName,
     string OriginalTexContent,
@@ -293,10 +300,28 @@ public interface ICompilerProcessRunner
 
 public interface IDocumentStorage
 {
-    Task<StoredDocument> CreateAsync(string originalFileName, string originalTexContent, CancellationToken cancellationToken);
+    Task<StoredDocument> CreateAsync(string ownerUserId, string originalFileName, string originalTexContent, CancellationToken cancellationToken);
     Task SaveAsync(StoredDocument document, CancellationToken cancellationToken);
-    Task<StoredDocument?> FindAsync(Guid id, CancellationToken cancellationToken);
-    Task<string> StoreCompiledPdfAsync(Guid id, byte[] pdfBytes, CancellationToken cancellationToken);
+    Task<StoredDocument?> FindAsync(Guid id, string ownerUserId, CancellationToken cancellationToken);
+    Task<string> StoreCompiledPdfAsync(Guid id, string ownerUserId, byte[] pdfBytes, CancellationToken cancellationToken);
+}
+
+public interface ICurrentUserProvider
+{
+    string CurrentUserId { get; }
+}
+
+public sealed class DevelopmentCurrentUserProvider : ICurrentUserProvider
+{
+    public DevelopmentCurrentUserProvider(IConfiguration configuration)
+    {
+        CurrentUserId = configuration
+            .GetSection(DocumentProcessingOptions.SectionName)
+            .Get<DocumentProcessingOptions>()?
+            .DevelopmentUserId ?? "development-user";
+    }
+
+    public string CurrentUserId { get; }
 }
 
 public sealed class PlaceholderPythonTailoringClient : IPythonTailoringClient
@@ -533,6 +558,7 @@ public sealed class TectonicCompiler : ITectonicCompiler
 
             var pdfReference = await _storage.StoreCompiledPdfAsync(
                 document.Id,
+                document.OwnerUserId,
                 await File.ReadAllBytesAsync(pdfPath, cancellationToken),
                 cancellationToken);
 
@@ -641,11 +667,12 @@ public sealed class LocalFileDocumentStorage : IDocumentStorage
         Directory.CreateDirectory(_root);
     }
 
-    public async Task<StoredDocument> CreateAsync(string originalFileName, string originalTexContent, CancellationToken cancellationToken)
+    public async Task<StoredDocument> CreateAsync(string ownerUserId, string originalFileName, string originalTexContent, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         var document = new StoredDocument(
             Guid.NewGuid(),
+            ownerUserId,
             DocumentStatus.PENDING,
             Path.GetFileName(originalFileName),
             originalTexContent,
@@ -683,7 +710,7 @@ public sealed class LocalFileDocumentStorage : IDocumentStorage
         }
     }
 
-    public async Task<StoredDocument?> FindAsync(Guid id, CancellationToken cancellationToken)
+    public async Task<StoredDocument?> FindAsync(Guid id, string ownerUserId, CancellationToken cancellationToken)
     {
         var jsonPath = Path.Combine(GetSafeDocumentDirectory(id), "document.json");
         if (!File.Exists(jsonPath))
@@ -692,11 +719,17 @@ public sealed class LocalFileDocumentStorage : IDocumentStorage
         }
 
         var json = await File.ReadAllTextAsync(jsonPath, cancellationToken);
-        return JsonSerializer.Deserialize<StoredDocument>(json, JsonDefaults.Options);
+        var document = JsonSerializer.Deserialize<StoredDocument>(json, JsonDefaults.Options);
+        return document?.OwnerUserId == ownerUserId ? document : null;
     }
 
-    public async Task<string> StoreCompiledPdfAsync(Guid id, byte[] pdfBytes, CancellationToken cancellationToken)
+    public async Task<string> StoreCompiledPdfAsync(Guid id, string ownerUserId, byte[] pdfBytes, CancellationToken cancellationToken)
     {
+        var document = await FindAsync(id, ownerUserId, cancellationToken);
+        if (document is null)
+        {
+            throw new InvalidOperationException("Document was not found for the current owner.");
+        }
         var directory = GetSafeDocumentDirectory(id);
         Directory.CreateDirectory(directory);
         await File.WriteAllBytesAsync(Path.Combine(directory, "compiled.pdf"), pdfBytes, cancellationToken);

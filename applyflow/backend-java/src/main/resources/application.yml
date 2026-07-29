@@ -21,6 +21,8 @@ spring:
         acknowledge-mode: manual
 
 applyflow:
+  auth:
+    development-user-id: ${APPLYFLOW_DEVELOPMENT_USER_ID:development-user}
   storage:
     resumes-dir: ${APPLYFLOW_RESUME_STORAGE_DIR:${java.io.tmpdir}/applyflow/resumes}
     max-upload-bytes: ${APPLYFLOW_MAX_UPLOAD_BYTES:1048576}

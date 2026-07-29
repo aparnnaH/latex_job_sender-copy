@@ -37,9 +37,11 @@ public class ResumeVersionService {
     private final ResumeFileStorageService storageService;
     private final ResumeTailoringEventPublisher eventPublisher;
     private final ResumeVersionMapper mapper;
+    private final CurrentUserProvider currentUserProvider;
 
     public ResumeVersionResponse requestTailoring(UUID jobApplicationId, MultipartFile file) {
-        var jobApplication = jobApplicationRepository.findById(jobApplicationId)
+        var ownerUserId = currentUserId();
+        var jobApplication = jobApplicationRepository.findByIdAndOwnerUserId(jobApplicationId, ownerUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("Job application not found: " + jobApplicationId));
 
         var resumeVersionId = UUID.randomUUID();
@@ -47,12 +49,13 @@ public class ResumeVersionService {
 
         var version = new ResumeVersion();
         version.setId(resumeVersionId);
+        version.setOwnerUserId(ownerUserId);
         version.setJobApplicationId(jobApplicationId);
         version.setOriginalFileName(file.getOriginalFilename());
         version.setBaseResumeName(file.getOriginalFilename());
         version.setStoredFilePath(storedFiles.inputPath().toString());
         version.setOutputFilePath(storedFiles.outputPath().toString());
-        version.setVersionNumber((int) resumeVersionRepository.countByJobApplicationId(jobApplicationId) + 1);
+        version.setVersionNumber((int) resumeVersionRepository.countByJobApplicationIdAndOwnerUserId(jobApplicationId, ownerUserId) + 1);
         version.setTailoringStatus(TailoringStatus.PENDING);
         version.setProcessingStatus(TailoringStatus.PENDING);
 
@@ -74,10 +77,11 @@ public class ResumeVersionService {
 
     @Transactional(readOnly = true)
     public java.util.List<ResumeVersionResponse> findByJobApplicationId(UUID jobApplicationId) {
-        if (!jobApplicationRepository.existsById(jobApplicationId)) {
+        var ownerUserId = currentUserId();
+        if (!jobApplicationRepository.existsByIdAndOwnerUserId(jobApplicationId, ownerUserId)) {
             throw new ResourceNotFoundException("Job application not found: " + jobApplicationId);
         }
-        return resumeVersionRepository.findByJobApplicationIdOrderByVersionNumberDesc(jobApplicationId).stream()
+        return resumeVersionRepository.findByJobApplicationIdAndOwnerUserIdOrderByVersionNumberDesc(jobApplicationId, ownerUserId).stream()
                 .map(mapper::toResponse)
                 .toList();
     }
@@ -134,7 +138,8 @@ public class ResumeVersionService {
         if (source.getTailoringStatus() != TailoringStatus.FAILED) {
             throw new InvalidRequestException("Only failed resume versions can be retried.");
         }
-        var jobApplication = jobApplicationRepository.findById(source.getJobApplicationId())
+        var ownerUserId = currentUserId();
+        var jobApplication = jobApplicationRepository.findByIdAndOwnerUserId(source.getJobApplicationId(), ownerUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("Job application not found: " + source.getJobApplicationId()));
         if (source.getStoredFilePath() == null || !Files.isReadable(Path.of(source.getStoredFilePath()))) {
             throw new ResourceNotFoundException("The original resume source is not available for retry.");
@@ -154,12 +159,13 @@ public class ResumeVersionService {
 
         var version = new ResumeVersion();
         version.setId(retryVersionId);
+        version.setOwnerUserId(ownerUserId);
         version.setJobApplicationId(source.getJobApplicationId());
         version.setOriginalFileName(source.getOriginalFileName());
         version.setBaseResumeName(source.getBaseResumeName());
         version.setStoredFilePath(inputPath.toString());
         version.setOutputFilePath(outputPath.toString());
-        version.setVersionNumber((int) resumeVersionRepository.countByJobApplicationId(source.getJobApplicationId()) + 1);
+        version.setVersionNumber((int) resumeVersionRepository.countByJobApplicationIdAndOwnerUserId(source.getJobApplicationId(), ownerUserId) + 1);
         version.setTailoringStatus(TailoringStatus.PENDING);
         version.setProcessingStatus(TailoringStatus.PENDING);
         version.setMatchScoreBefore(source.getMatchScoreBefore());
@@ -176,7 +182,7 @@ public class ResumeVersionService {
 
     @Transactional
     public boolean markProcessing(UUID id) {
-        return resumeVersionRepository.transitionStatus(id, TailoringStatus.PENDING, TailoringStatus.PROCESSING) == 1;
+        return resumeVersionRepository.transitionStatus(id, currentUserId(), TailoringStatus.PENDING, TailoringStatus.PROCESSING) == 1;
     }
 
     @Transactional
@@ -184,7 +190,7 @@ public class ResumeVersionService {
         if (!markProcessing(id)) {
             return Optional.empty();
         }
-        return resumeVersionRepository.findById(id).map(ResumeVersion::getAttemptCount);
+        return resumeVersionRepository.findByIdAndOwnerUserId(id, currentUserId()).map(ResumeVersion::getAttemptCount);
     }
 
     @Transactional
@@ -251,8 +257,12 @@ public class ResumeVersionService {
     }
 
     private ResumeVersion findEntity(UUID id) {
-        return resumeVersionRepository.findById(id)
+        return resumeVersionRepository.findByIdAndOwnerUserId(id, currentUserId())
                 .orElseThrow(() -> new ResourceNotFoundException("Resume version not found: " + id));
+    }
+
+    private String currentUserId() {
+        return currentUserProvider.currentUserId();
     }
 
     private Path propertiesResumesDir(UUID jobApplicationId, UUID resumeVersionId) {

@@ -25,6 +25,9 @@ public class ResumeVersion {
     private UUID id;
 
     @Column(nullable = false)
+    private String ownerUserId;
+
+    @Column(nullable = false)
     private UUID jobApplicationId;
 
     @Column(nullable = false)

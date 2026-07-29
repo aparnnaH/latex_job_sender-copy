@@ -35,23 +35,26 @@ class ResumeVersionServiceTest {
     @Mock
     private ResumeTailoringEventPublisher eventPublisher;
     private ResumeVersionService service;
+    private String currentUserId;
 
     @BeforeEach
     void setUp() {
+        currentUserId = "development-user-a";
         service = new ResumeVersionService(
                 jobApplicationRepository,
                 resumeVersionRepository,
                 storageService,
                 eventPublisher,
-                new ResumeVersionMapper());
+                new ResumeVersionMapper(),
+                () -> currentUserId);
     }
 
     @Test
     void requestTailoringCreatesVersionAndPublishesEvent() {
         var application = application();
         var file = new MockMultipartFile("resume", "resume.tex", "application/x-tex", "\\documentclass{article}".getBytes());
-        when(jobApplicationRepository.findById(application.getId())).thenReturn(Optional.of(application));
-        when(resumeVersionRepository.countByJobApplicationId(application.getId())).thenReturn(2L);
+        when(jobApplicationRepository.findByIdAndOwnerUserId(application.getId(), "development-user-a")).thenReturn(Optional.of(application));
+        when(resumeVersionRepository.countByJobApplicationIdAndOwnerUserId(application.getId(), "development-user-a")).thenReturn(2L);
         when(storageService.storeInput(any(), any(), any()))
                 .thenReturn(new ResumeFileStorageService.StoredResumeFiles(Path.of("input.tex"), Path.of("output.tex")));
         when(resumeVersionRepository.save(any())).thenAnswer(invocation -> {
@@ -69,6 +72,11 @@ class ResumeVersionServiceTest {
         assertThat(response.documentServiceId()).isNull();
         assertThat(response.versionNumber()).isEqualTo(3);
 
+        ArgumentCaptor<com.applyflow.backend.entity.ResumeVersion> versionCaptor =
+                ArgumentCaptor.forClass(com.applyflow.backend.entity.ResumeVersion.class);
+        verify(resumeVersionRepository).save(versionCaptor.capture());
+        assertThat(versionCaptor.getValue().getOwnerUserId()).isEqualTo("development-user-a");
+
         ArgumentCaptor<ResumeTailoringRequestedEvent> eventCaptor = ArgumentCaptor.forClass(ResumeTailoringRequestedEvent.class);
         verify(eventPublisher).publish(eventCaptor.capture());
         assertThat(eventCaptor.getValue().jobApplicationId()).isEqualTo(application.getId());
@@ -77,9 +85,29 @@ class ResumeVersionServiceTest {
         assertThat(eventCaptor.getValue().outputResumePath()).isEqualTo("output.tex");
     }
 
+    @Test
+    void requestTailoringDoesNotUseAnotherDevelopmentUsersApplication() {
+        var applicationId = UUID.randomUUID();
+        var file = new MockMultipartFile("resume", "resume.tex", "application/x-tex", "\\documentclass{article}".getBytes());
+        when(jobApplicationRepository.findByIdAndOwnerUserId(applicationId, "development-user-a")).thenReturn(Optional.empty());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.requestTailoring(applicationId, file))
+                .isInstanceOf(com.applyflow.backend.exception.ResourceNotFoundException.class);
+    }
+
+    @Test
+    void findByIdDoesNotReturnAnotherDevelopmentUsersResumeVersion() {
+        var resumeVersionId = UUID.randomUUID();
+        when(resumeVersionRepository.findByIdAndOwnerUserId(resumeVersionId, "development-user-a")).thenReturn(Optional.empty());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.findById(resumeVersionId))
+                .isInstanceOf(com.applyflow.backend.exception.ResourceNotFoundException.class);
+    }
+
     private JobApplication application() {
         var application = new JobApplication();
         application.setId(UUID.randomUUID());
+        application.setOwnerUserId("development-user-a");
         application.setCompany("Acme");
         application.setJobTitle("Backend Engineer");
         application.setJobDescription("Build Java services");
