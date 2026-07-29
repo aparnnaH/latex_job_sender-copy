@@ -10,6 +10,7 @@ import com.applyflow.backend.repository.JobApplicationRepository;
 import com.applyflow.backend.repository.ResumeVersionRepository;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.FileSystemResource;
@@ -88,6 +89,25 @@ public class ResumeVersionService {
     @Transactional
     public boolean markProcessing(UUID id) {
         return resumeVersionRepository.transitionStatus(id, TailoringStatus.PENDING, TailoringStatus.PROCESSING) == 1;
+    }
+
+    @Transactional
+    public Optional<Integer> beginProcessing(UUID id) {
+        if (!markProcessing(id)) {
+            return Optional.empty();
+        }
+        return resumeVersionRepository.findById(id).map(ResumeVersion::getAttemptCount);
+    }
+
+    @Transactional
+    public void markPendingForRetry(UUID id, String errorCode, String safeErrorMessage) {
+        var version = findEntity(id);
+        version.setTailoringStatus(TailoringStatus.PENDING);
+        version.setProcessingStatus(TailoringStatus.PENDING);
+        version.setFailureMessage(safeErrorMessage);
+        version.setErrorCode(errorCode);
+        version.setSafeErrorMessage(safeErrorMessage);
+        resumeVersionRepository.save(version);
     }
 
     @Transactional

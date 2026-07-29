@@ -8,12 +8,14 @@ import com.applyflow.backend.service.PythonTailoringClient;
 import com.applyflow.backend.service.PythonTailoringResult;
 import com.applyflow.backend.service.ResumeFileStorageService;
 import com.applyflow.backend.service.ResumeVersionService;
+import com.rabbitmq.client.Channel;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.core.Message;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -28,9 +30,12 @@ public class ResumeTailoringWorker {
     private final ApplyFlowProperties properties;
 
     @RabbitListener(queues = "${applyflow.rabbitmq.queue}")
-    public void handle(ResumeTailoringRequestedEvent event) {
-        if (!resumeVersionService.markProcessing(event.resumeVersionId())) {
+    public void handle(ResumeTailoringRequestedEvent event, Message message, Channel channel) throws IOException {
+        var deliveryTag = message.getMessageProperties().getDeliveryTag();
+        var attempt = resumeVersionService.beginProcessing(event.resumeVersionId());
+        if (attempt.isEmpty()) {
             log.info("Skipping duplicate or already-processed resume tailoring event for version {}", event.resumeVersionId());
+            channel.basicAck(deliveryTag, false);
             return;
         }
 
@@ -52,6 +57,7 @@ public class ResumeTailoringWorker {
                         outputPath.toString(),
                         result.documentId() == null ? null : result.documentId().toString());
                 log.info("Document service tailoring completed for version {}", event.resumeVersionId());
+                channel.basicAck(deliveryTag, false);
                 return;
             }
 
@@ -59,12 +65,12 @@ public class ResumeTailoringWorker {
             var safeMessage = result.safeErrorMessage() == null
                     ? "The document service could not tailor the resume."
                     : result.safeErrorMessage();
-            resumeVersionService.markFailed(event.resumeVersionId(), errorCode, safeMessage);
-            throw new AmqpRejectAndDontRequeueException(safeMessage);
+            finishFailure(event, deliveryTag, channel, attempt.get(), result.retryable(), errorCode, safeMessage);
+            return;
         } catch (DocumentServiceException exception) {
             if (!properties.documentService().pythonFallbackEnabled()) {
-                resumeVersionService.markFailed(event.resumeVersionId(), exception.code(), exception.safeMessage());
-                throw new AmqpRejectAndDontRequeueException(exception.safeMessage(), exception);
+                finishFailure(event, deliveryTag, channel, attempt.get(), exception.retryable(), exception.code(), exception.safeMessage());
+                return;
             }
             log.warn("Document service failed for version {}; using development Python fallback", event.resumeVersionId());
         }
@@ -81,6 +87,7 @@ public class ResumeTailoringWorker {
             if (result.succeeded() && outputPath.toFile().exists()) {
                 resumeVersionService.markCompleted(event.resumeVersionId(), outputPath.toString());
                 log.info("Resume tailoring completed for version {} in {} ms", event.resumeVersionId(), result.duration().toMillis());
+                channel.basicAck(deliveryTag, false);
                 return;
             }
 
@@ -92,7 +99,27 @@ public class ResumeTailoringWorker {
                 ? "Python tailoring timed out."
                 : "Python tailoring failed with exit code " + (result == null ? "unknown" : result.exitCode()) + ".";
         var code = result != null && result.timedOut() ? "PYTHON_PROCESS_TIMEOUT" : "PYTHON_PROCESS_FAILED";
-        resumeVersionService.markFailed(event.resumeVersionId(), code, reason);
-        throw new AmqpRejectAndDontRequeueException(reason);
+        finishFailure(event, deliveryTag, channel, attempt.get(), result != null && result.timedOut(), code, reason);
+    }
+
+    private void finishFailure(
+            ResumeTailoringRequestedEvent event,
+            long deliveryTag,
+            Channel channel,
+            int attempt,
+            boolean retryable,
+            String errorCode,
+            String safeMessage) throws IOException {
+        var maxAttempts = Math.max(1, properties.tailoring().maxAttempts());
+        if (retryable && attempt < maxAttempts) {
+            resumeVersionService.markPendingForRetry(event.resumeVersionId(), errorCode, safeMessage);
+            log.warn("Retrying resume tailoring version {} after attempt {} of {}", event.resumeVersionId(), attempt, maxAttempts);
+            channel.basicNack(deliveryTag, false, true);
+            return;
+        }
+
+        resumeVersionService.markFailed(event.resumeVersionId(), errorCode, safeMessage);
+        log.warn("Resume tailoring version {} failed after attempt {} of {}", event.resumeVersionId(), attempt, maxAttempts);
+        channel.basicReject(deliveryTag, false);
     }
 }

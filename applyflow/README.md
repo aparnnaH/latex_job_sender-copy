@@ -97,11 +97,18 @@ cd applyflow/backend-java
 mvn spring-boot:run
 ```
 
-Health check:
+Operational checks:
 
 ```sh
 curl http://localhost:8080/actuator/health
+curl http://localhost:8080/actuator/health/liveness
+curl http://localhost:8080/actuator/health/readiness
+curl http://localhost:8080/api/status
 ```
+
+`/actuator/health/liveness` reports whether the Java process is alive. `/actuator/health/readiness` reports whether the service is ready to handle traffic, including PostgreSQL, RabbitMQ, and the ASP.NET document service at `APPLYFLOW_DOCUMENT_SERVICE_URL`. Actuator health details are hidden so credentials and internal errors are not exposed.
+
+`/api/status` returns a small development summary with top-level statuses for `javaApplication`, `postgresql`, `rabbitmq`, and `documentService`.
 
 ## Demo Commands
 

@@ -13,6 +13,7 @@ import {
 } from "@/lib/latex";
 import { sampleJobDescription, sampleLatexResume, sampleOverleafFiles } from "@/lib/samples";
 import { aiResponseSchema, autofillProfileSchema, jobInputSchema, latexSourceSchema } from "@/lib/schemas";
+import { localApi } from "@/lib/api";
 import type {
   AcceptedChange,
   AiResponseShape,
@@ -1064,16 +1065,7 @@ function buildAiResponse(
 }
 
 async function fetchProjectFolderFiles() {
-  const response = await fetch("/api/project");
-  if (!response.ok) {
-    const error = (await response.json()) as { error?: string };
-    throw new Error(error.error || "Could not load resume-project.");
-  }
-
-  const project = (await response.json()) as {
-    files: Array<{ name: string; content: string }>;
-    loadedFrom?: string;
-  };
+  const project = await localApi.getProject();
 
   return {
     files: project.files.map((file) => createResumeSourceFile(file.name, file.content)),
@@ -1661,13 +1653,7 @@ export default function TailorTexApp() {
   async function writeLocalStoreSnapshot(data: TailorTexLocalStore, successMessage: string) {
     const savedAt = data.savedAt ?? new Date().toISOString();
     try {
-      const response = await fetch("/api/local-store", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, savedAt })
-      });
-      const result = (await response.json().catch(() => ({}))) as { path?: string };
-      if (!response.ok) throw new Error("Local file sync failed.");
+      const result = await localApi.saveLocalStore({ ...data, savedAt });
       setLocalStoreStatus((current) => ({
         state: "file",
         message: successMessage,
@@ -1862,18 +1848,17 @@ export default function TailorTexApp() {
 
     async function bootstrapStorage() {
       try {
-        const response = await fetch("/api/local-store", { cache: "no-store" });
-        if (response.ok) {
-          const localData = (await response.json()) as TailorTexLocalStore;
+        const response = await localApi.getLocalStore<TailorTexLocalStore>();
+        if (response.ok && response.data) {
+          const localData = response.data;
           if (cancelled) return;
           applyTailorTexLocalStore(localData);
-          const localPath = response.headers.get("X-TailorTeX-Local-Store-Path") ?? undefined;
           setLocalStoreStatus({
             state: "file",
             message: localData.savedAt
               ? `Storage: local file synced. Last saved ${new Date(localData.savedAt).toLocaleString()}.`
               : "Storage: local file synced.",
-            path: localPath,
+            path: response.path,
             lastSyncedAt: localData.savedAt,
             isSaving: false,
             browserFallbackActive: true,
@@ -3243,44 +3228,10 @@ export default function TailorTexApp() {
   }
 
   async function compilePdfFiles(filesToCompile: ResumeSourceFile[], mainFile: string) {
-    const response = await fetch("/api/compile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        files: filesToCompile.map((file) => ({ name: file.name, content: file.content })),
-        mainFile
-      })
+    return localApi.compilePdf({
+      files: filesToCompile.map((file) => ({ name: file.name, content: file.content })),
+      mainFile
     });
-
-    if (!response.ok) {
-      const responseText = await response.text();
-      const contentType = response.headers.get("content-type") ?? "";
-      let message = responseText;
-
-      if (contentType.includes("application/json")) {
-        try {
-          const error = JSON.parse(responseText) as { error?: string };
-          message = error.error || responseText;
-        } catch {
-          message = responseText;
-        }
-      }
-
-      throw new Error(
-        message
-          .replace(/<[^>]*>/g, " ")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 1600) || "The LaTeX compiler failed."
-      );
-    }
-
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const compileFixes = decodeURIComponent(response.headers.get("X-TailorTeX-Compile-Fixes") ?? "");
-    const pageCount = Number(response.headers.get("X-TailorTeX-Page-Count") ?? "0") || undefined;
-
-    return { url, compileFixes, pageCount };
   }
 
   async function compileOriginalPdfPreview() {

@@ -16,6 +16,9 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:applyflow}
     password: ${RABBITMQ_PASSWORD:applyflow}
+    listener:
+      simple:
+        acknowledge-mode: manual
 
 applyflow:
   storage:
@@ -39,6 +42,16 @@ applyflow:
     dead-letter-queue: ${APPLYFLOW_RABBITMQ_DLQ:applyflow.resume-tailoring.dead}
 
 management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        readiness:
+          include: readinessState,db,rabbit,documentService
+        liveness:
+          include: livenessState,ping
   endpoints:
     web:
       exposure:

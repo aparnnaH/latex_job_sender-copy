@@ -123,7 +123,13 @@ Base path: `/api/resume-versions`
 ### Health Endpoint
 
 - `GET /actuator/health`
-  - Exposed through Spring Boot Actuator.
+  - Exposed through Spring Boot Actuator with details hidden.
+- `GET /actuator/health/liveness`
+  - Liveness probe for the Java application process.
+- `GET /actuator/health/readiness`
+  - Readiness probe including PostgreSQL, RabbitMQ, and the ASP.NET document service.
+- `GET /api/status`
+  - Small development summary with sanitized statuses for `javaApplication`, `postgresql`, `rabbitmq`, and `documentService`.
 
 ## Existing Database Relationships
 
