@@ -6,6 +6,9 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
+// Temporary development fallback: production document compilation is centralized
+// in the ASP.NET Core document service under api/.
+
 type CompileFile = {
   name: string;
   content: string;
