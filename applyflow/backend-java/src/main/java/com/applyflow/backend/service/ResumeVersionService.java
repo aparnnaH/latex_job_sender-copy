@@ -9,6 +9,8 @@ import com.applyflow.backend.exception.ResourceNotFoundException;
 import com.applyflow.backend.repository.JobApplicationRepository;
 import com.applyflow.backend.repository.ResumeVersionRepository;
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
@@ -86,6 +88,61 @@ public class ResumeVersionService {
         return resource;
     }
 
+    @Transactional(readOnly = true)
+    public Resource downloadPdf(UUID id) {
+        var version = findEntity(id);
+        if (version.getTailoringStatus() != TailoringStatus.COMPLETED || version.getDocumentServiceId() == null) {
+            throw new InvalidRequestException("Resume PDF is not available for this version.");
+        }
+        throw new ResourceNotFoundException("Generated PDF download is not available yet.");
+    }
+
+    @Transactional
+    public ResumeVersionResponse retry(UUID id) {
+        var source = findEntity(id);
+        if (source.getTailoringStatus() != TailoringStatus.FAILED) {
+            throw new InvalidRequestException("Only failed resume versions can be retried.");
+        }
+        var jobApplication = jobApplicationRepository.findById(source.getJobApplicationId())
+                .orElseThrow(() -> new ResourceNotFoundException("Job application not found: " + source.getJobApplicationId()));
+        if (source.getStoredFilePath() == null || !Files.isReadable(Path.of(source.getStoredFilePath()))) {
+            throw new ResourceNotFoundException("The original resume source is not available for retry.");
+        }
+
+        var retryVersionId = UUID.randomUUID();
+        var directory = propertiesResumesDir(source.getJobApplicationId(), retryVersionId);
+        var inputPath = directory.resolve("input.tex");
+        var outputPath = directory.resolve("tailored.tex");
+
+        try {
+            Files.createDirectories(directory);
+            Files.copy(Path.of(source.getStoredFilePath()), inputPath);
+        } catch (IOException exception) {
+            throw new InvalidRequestException("Could not prepare the retry job.");
+        }
+
+        var version = new ResumeVersion();
+        version.setId(retryVersionId);
+        version.setJobApplicationId(source.getJobApplicationId());
+        version.setOriginalFileName(source.getOriginalFileName());
+        version.setBaseResumeName(source.getBaseResumeName());
+        version.setStoredFilePath(inputPath.toString());
+        version.setOutputFilePath(outputPath.toString());
+        version.setVersionNumber((int) resumeVersionRepository.countByJobApplicationId(source.getJobApplicationId()) + 1);
+        version.setTailoringStatus(TailoringStatus.PENDING);
+        version.setProcessingStatus(TailoringStatus.PENDING);
+        version.setMatchScoreBefore(source.getMatchScoreBefore());
+
+        var saved = resumeVersionRepository.save(version);
+        eventPublisher.publish(new ResumeTailoringRequestedEvent(
+                source.getJobApplicationId(),
+                saved.getId(),
+                saved.getStoredFilePath(),
+                jobApplication.getJobDescription(),
+                saved.getOutputFilePath()));
+        return mapper.toResponse(saved);
+    }
+
     @Transactional
     public boolean markProcessing(UUID id) {
         return resumeVersionRepository.transitionStatus(id, TailoringStatus.PENDING, TailoringStatus.PROCESSING) == 1;
@@ -149,5 +206,9 @@ public class ResumeVersionService {
     private ResumeVersion findEntity(UUID id) {
         return resumeVersionRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Resume version not found: " + id));
+    }
+
+    private Path propertiesResumesDir(UUID jobApplicationId, UUID resumeVersionId) {
+        return storageService.resumeVersionDirectory(jobApplicationId, resumeVersionId);
     }
 }

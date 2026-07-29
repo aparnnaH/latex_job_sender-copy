@@ -9,13 +9,13 @@ public record ResumeVersionResponse(
         UUID jobApplicationId,
         String originalFileName,
         String baseResumeName,
-        String storedFilePath,
-        String outputFilePath,
         Integer versionNumber,
         TailoringStatus tailoringStatus,
         TailoringStatus processingStatus,
+        Integer matchScoreBefore,
+        Integer matchScoreAfter,
+        DocumentAvailability documentAvailability,
         String documentServiceId,
-        String failureMessage,
         String errorCode,
         String safeErrorMessage,
         Integer attemptCount,
@@ -24,4 +24,10 @@ public record ResumeVersionResponse(
         OffsetDateTime processingStartedAt,
         OffsetDateTime processingCompletedAt
 ) {
+    public record DocumentAvailability(
+            boolean sourceTex,
+            boolean tailoredTex,
+            boolean pdf
+    ) {
+    }
 }

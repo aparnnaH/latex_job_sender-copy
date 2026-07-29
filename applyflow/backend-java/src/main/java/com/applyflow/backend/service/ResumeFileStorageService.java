@@ -18,9 +18,7 @@ public class ResumeFileStorageService {
 
     public StoredResumeFiles storeInput(UUID jobApplicationId, UUID resumeVersionId, MultipartFile file) {
         validateUpload(file);
-        var directory = properties.storage().resumesDir()
-                .resolve(jobApplicationId.toString())
-                .resolve(resumeVersionId.toString());
+        var directory = resumeVersionDirectory(jobApplicationId, resumeVersionId);
         var inputPath = directory.resolve("input.tex");
         var outputPath = directory.resolve("tailored.tex");
 
@@ -31,6 +29,12 @@ public class ResumeFileStorageService {
         } catch (IOException exception) {
             throw new InvalidRequestException("Could not store uploaded resume.");
         }
+    }
+
+    public Path resumeVersionDirectory(UUID jobApplicationId, UUID resumeVersionId) {
+        return properties.storage().resumesDir()
+                .resolve(jobApplicationId.toString())
+                .resolve(resumeVersionId.toString());
     }
 
     public void deleteIfExists(Path path) {

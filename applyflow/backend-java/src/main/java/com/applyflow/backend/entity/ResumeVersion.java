@@ -43,6 +43,10 @@ public class ResumeVersion {
 
     private String documentServiceId;
 
+    private Integer matchScoreBefore;
+
+    private Integer matchScoreAfter;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private TailoringStatus tailoringStatus;

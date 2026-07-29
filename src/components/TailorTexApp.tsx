@@ -14,7 +14,7 @@ import {
 import { sampleJobDescription, sampleLatexResume, sampleOverleafFiles } from "@/lib/samples";
 import { aiResponseSchema, autofillProfileSchema, jobInputSchema, latexSourceSchema } from "@/lib/schemas";
 import { backendApi, isBackendMode, localApi } from "@/lib/api";
-import type { ApplicationStatus, JobApplication, JobApplicationRequest } from "@/lib/api";
+import type { ApplicationStatus, JobApplication, JobApplicationRequest, ResumeVersion } from "@/lib/api";
 import type {
   AcceptedChange,
   AiResponseShape,
@@ -359,6 +359,15 @@ function downloadText(filename: string, content: string) {
 
 function downloadJson(filename: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -1991,7 +2000,7 @@ export default function TailorTexApp() {
                       ? "Server tailoring failed."
                       : "Server tailoring is processing...",
                 error: version.processingStatus === "FAILED"
-                  ? version.safeErrorMessage || version.failureMessage || "The server could not tailor this resume."
+                  ? version.safeErrorMessage || "The server could not tailor this resume."
                   : undefined
               }
             }));
@@ -7194,7 +7203,37 @@ function BackendApplicationTrackerPanel({
   const [editingId, setEditingId] = useState<string | undefined>();
   const [draft, setDraft] = useState<BackendApplicationDraft>(() => emptyBackendApplicationDraft(currentJob));
   const [selectedResumeFiles, setSelectedResumeFiles] = useState<Record<string, File | undefined>>({});
+  const [resumeVersions, setResumeVersions] = useState<Record<string, ResumeVersion[]>>({});
+  const [versionMessages, setVersionMessages] = useState<Record<string, string | undefined>>({});
   const isSaving = status.state === "saving";
+
+  const loadVersions = useCallback(async (applicationId: string) => {
+    setVersionMessages((current) => ({ ...current, [applicationId]: "Loading version history..." }));
+    try {
+      const versions = await backendApi.listResumeVersions(applicationId);
+      setResumeVersions((current) => ({ ...current, [applicationId]: versions }));
+      setVersionMessages((current) => ({ ...current, [applicationId]: undefined }));
+    } catch (error) {
+      setVersionMessages((current) => ({
+        ...current,
+        [applicationId]: error instanceof Error ? error.message : "Could not load version history."
+      }));
+    }
+  }, []);
+
+  useEffect(() => {
+    applications.forEach((application) => {
+      void loadVersions(application.id);
+    });
+  }, [applications, loadVersions]);
+
+  useEffect(() => {
+    Object.entries(tailoringJobs).forEach(([applicationId, job]) => {
+      if (job.status === "COMPLETED" || job.status === "FAILED") {
+        void loadVersions(applicationId);
+      }
+    });
+  }, [tailoringJobs, loadVersions]);
 
   function updateDraft(field: keyof BackendApplicationDraft, value: string) {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -7216,6 +7255,36 @@ function BackendApplicationTrackerPanel({
       type: "application/x-tex"
     });
     onStartTailoring(application, resumeFile);
+  }
+
+  async function downloadVersion(version: ResumeVersion, format: "tex" | "pdf") {
+    try {
+      const blob = format === "tex"
+        ? await backendApi.downloadResumeVersion(version.id)
+        : await backendApi.downloadResumeVersionPdf(version.id);
+      downloadBlob(`resume-v${version.versionNumber}.${format}`, blob);
+    } catch (error) {
+      setVersionMessages((current) => ({
+        ...current,
+        [version.jobApplicationId]: error instanceof Error ? error.message : `Could not download ${format.toUpperCase()}.`
+      }));
+    }
+  }
+
+  async function retryVersion(version: ResumeVersion) {
+    const confirmed = window.confirm("Create a new retry job for this failed resume version? The original failed version will remain in history.");
+    if (!confirmed) return;
+    setVersionMessages((current) => ({ ...current, [version.jobApplicationId]: "Creating retry job..." }));
+    try {
+      const retry = await backendApi.retryResumeVersion(version.id);
+      setResumeVersions((current) => ({ ...current, [version.jobApplicationId]: [retry, ...(current[version.jobApplicationId] ?? [])] }));
+      setVersionMessages((current) => ({ ...current, [version.jobApplicationId]: "Retry job created." }));
+    } catch (error) {
+      setVersionMessages((current) => ({
+        ...current,
+        [version.jobApplicationId]: error instanceof Error ? error.message : "Could not create retry job."
+      }));
+    }
   }
 
   return (
@@ -7397,6 +7466,15 @@ function BackendApplicationTrackerPanel({
                     </button>
                   </div>
                 </div>
+                <ResumeVersionHistory
+                  versions={resumeVersions[application.id] ?? []}
+                  message={versionMessages[application.id]}
+                  onRefresh={() => void loadVersions(application.id)}
+                  onOpen={(version) => onLoadTailoredResume(application, version.id)}
+                  onDownloadTex={(version) => void downloadVersion(version, "tex")}
+                  onDownloadPdf={(version) => void downloadVersion(version, "pdf")}
+                  onRetry={(version) => void retryVersion(version)}
+                />
               </article>
             );
             })
@@ -7436,6 +7514,117 @@ function BackendTextField({
       />
     </label>
   );
+}
+
+function ResumeVersionHistory({
+  versions,
+  message,
+  onRefresh,
+  onOpen,
+  onDownloadTex,
+  onDownloadPdf,
+  onRetry
+}: {
+  versions: ResumeVersion[];
+  message?: string;
+  onRefresh: () => void;
+  onOpen: (version: ResumeVersion) => void;
+  onDownloadTex: (version: ResumeVersion) => void;
+  onDownloadPdf: (version: ResumeVersion) => void;
+  onRetry: (version: ResumeVersion) => void;
+}) {
+  return (
+    <div className="mt-3 border border-rule bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule bg-paper px-3 py-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/55">Resume version history</p>
+          <p className="mt-1 text-xs text-ink/55">{versions.length} version{versions.length === 1 ? "" : "s"} recorded for this application.</p>
+        </div>
+        <button type="button" onClick={onRefresh} className="border border-rule bg-white px-3 py-1.5 text-xs font-semibold text-ink/70 hover:bg-paper">
+          Refresh
+        </button>
+      </div>
+      {message ? <p className="border-b border-rule px-3 py-2 text-xs text-ink/60">{message}</p> : null}
+      {versions.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-full border-collapse text-left text-xs">
+            <thead className="bg-white text-ink/50">
+              <tr>
+                {["Version ID", "Base resume", "Created", "Status", "Before", "After", "Documents", "Actions"].map((heading) => (
+                  <th key={heading} className="border-b border-rule px-3 py-2 font-semibold">{heading}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {versions.map((version) => {
+                const completed = version.processingStatus === "COMPLETED";
+                const failed = version.processingStatus === "FAILED";
+                return (
+                  <tr key={version.id} className="align-top">
+                    <td className="border-b border-rule px-3 py-2 font-mono text-[11px] text-ink/70">{shortVersionId(version.id)}</td>
+                    <td className="border-b border-rule px-3 py-2 text-ink/70">{version.baseResumeName || version.originalFileName}</td>
+                    <td className="border-b border-rule px-3 py-2 text-ink/60">{formatBackendDate(version.createdAt)}</td>
+                    <td className="border-b border-rule px-3 py-2">
+                      <span className={cx("border px-2 py-1 font-semibold", failed ? "border-coral text-coral" : completed ? "border-sage text-sage" : "border-rule text-ink/60")}>
+                        {version.processingStatus}
+                      </span>
+                      {failed ? (
+                        <p className="mt-2 max-w-[220px] text-ink/55">{version.safeErrorMessage || "This version could not be processed."}</p>
+                      ) : null}
+                    </td>
+                    <td className="border-b border-rule px-3 py-2 text-ink/60">{formatScore(version.matchScoreBefore)}</td>
+                    <td className="border-b border-rule px-3 py-2 text-ink/60">{formatScore(version.matchScoreAfter)}</td>
+                    <td className="border-b border-rule px-3 py-2 text-ink/60">{formatAvailability(version.documentAvailability)}</td>
+                    <td className="border-b border-rule px-3 py-2">
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={() => onOpen(version)} disabled={!completed || !version.documentAvailability.tailoredTex} className="border border-ink bg-white px-2 py-1 font-semibold text-ink disabled:opacity-50">
+                          Open
+                        </button>
+                        <button type="button" onClick={() => onDownloadTex(version)} disabled={!completed || !version.documentAvailability.tailoredTex} className="border border-rule bg-white px-2 py-1 font-semibold text-ink/70 disabled:opacity-50">
+                          .tex
+                        </button>
+                        <button type="button" onClick={() => onDownloadPdf(version)} disabled={!completed || !version.documentAvailability.pdf} className="border border-rule bg-white px-2 py-1 font-semibold text-ink/70 disabled:opacity-50">
+                          PDF
+                        </button>
+                        {failed ? (
+                          <button type="button" onClick={() => onRetry(version)} className="border border-sage bg-white px-2 py-1 font-semibold text-sage hover:bg-sage hover:text-white">
+                            Retry
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="px-3 py-3 text-xs text-ink/55">No resume versions yet.</p>
+      )}
+    </div>
+  );
+}
+
+function shortVersionId(id: string) {
+  return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
+}
+
+function formatBackendDate(value?: string) {
+  return value ? new Date(value).toLocaleString() : "-";
+}
+
+function formatScore(value?: number | null) {
+  return typeof value === "number" ? `${value}/100` : "-";
+}
+
+function formatAvailability(availability: ResumeVersion["documentAvailability"]) {
+  const available = [
+    availability.sourceTex ? "source" : "",
+    availability.tailoredTex ? ".tex" : "",
+    availability.pdf ? "PDF" : ""
+  ].filter(Boolean);
+  return available.length > 0 ? available.join(", ") : "None";
 }
 
 function BackendTextArea({

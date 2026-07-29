@@ -84,12 +84,17 @@ export type ResumeVersion = {
   jobApplicationId: string;
   originalFileName: string;
   baseResumeName?: string | null;
-  outputFilePath?: string | null;
   versionNumber: number;
   documentServiceId?: string | null;
   tailoringStatus: ProcessingStatus;
   processingStatus: ProcessingStatus;
-  failureMessage?: string | null;
+  matchScoreBefore?: number | null;
+  matchScoreAfter?: number | null;
+  documentAvailability: {
+    sourceTex: boolean;
+    tailoredTex: boolean;
+    pdf: boolean;
+  };
   errorCode?: string | null;
   safeErrorMessage?: string | null;
   attemptCount?: number;

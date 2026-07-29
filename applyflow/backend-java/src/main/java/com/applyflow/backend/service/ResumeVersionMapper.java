@@ -2,6 +2,8 @@ package com.applyflow.backend.service;
 
 import com.applyflow.backend.dto.ResumeVersionResponse;
 import com.applyflow.backend.entity.ResumeVersion;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -13,13 +15,16 @@ public class ResumeVersionMapper {
                 version.getJobApplicationId(),
                 version.getOriginalFileName(),
                 version.getBaseResumeName(),
-                version.getStoredFilePath(),
-                version.getOutputFilePath(),
                 version.getVersionNumber(),
                 version.getTailoringStatus(),
                 version.getProcessingStatus(),
+                version.getMatchScoreBefore(),
+                version.getMatchScoreAfter(),
+                new ResumeVersionResponse.DocumentAvailability(
+                        isReadable(version.getStoredFilePath()),
+                        isReadable(version.getOutputFilePath()),
+                        version.getDocumentServiceId() != null),
                 version.getDocumentServiceId(),
-                version.getFailureMessage(),
                 version.getErrorCode(),
                 version.getSafeErrorMessage(),
                 version.getAttemptCount(),
@@ -28,5 +33,9 @@ public class ResumeVersionMapper {
                 version.getProcessingStartedAt(),
                 version.getProcessingCompletedAt()
         );
+    }
+
+    private boolean isReadable(String path) {
+        return path != null && Files.isReadable(Path.of(path));
     }
 }

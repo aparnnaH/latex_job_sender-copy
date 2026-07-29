@@ -84,6 +84,16 @@ export const backendApi = {
   },
 
   downloadResumeVersion(id: string) {
-    return apiFetch<Blob>(`/api/resume-versions/${id}/download`);
+    return apiFetch<Blob>(`/api/resume-versions/${id}/download/tex`);
+  },
+
+  downloadResumeVersionPdf(id: string) {
+    return apiFetch<Blob>(`/api/resume-versions/${id}/download/pdf`);
+  },
+
+  retryResumeVersion(id: string) {
+    return apiFetch<ResumeVersion>(`/api/resume-versions/${id}/retry`, {
+      method: "POST"
+    });
   }
 };
