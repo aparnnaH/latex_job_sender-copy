@@ -1,0 +1,3 @@
+Nimbus Works is hiring a software engineer to support internal workflow tools.
+
+The role needs Python automation, React interfaces, TypeScript code quality, SQL reporting, accessibility awareness, RabbitMQ messaging, and clear testing practices.
