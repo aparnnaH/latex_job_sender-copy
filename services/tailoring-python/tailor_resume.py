@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -100,6 +100,10 @@ class InvalidLatexError(TailoringError):
     """Raised when the resume does not look like LaTeX."""
 
 
+class UnsafeOutputError(TailoringError):
+    """Raised when the output path would overwrite protected input."""
+
+
 def parse_args(argv: Sequence[str]) -> TailoringInputs:
     parser = argparse.ArgumentParser(
         description="Create a deterministic TailorTeX report and copy the resume unchanged."
@@ -123,7 +127,12 @@ def read_required_text(path: Path, label: str) -> str:
         raise MissingInputError(f"{label} was not found: {path}")
     if not path.is_file():
         raise MissingInputError(f"{label} is not a file: {path}")
-    return path.read_text(encoding="utf-8")
+    content = path.read_text(encoding="utf-8")
+    if label == "Input resume" and not content.strip():
+        raise InvalidLatexError("Input resume is empty.")
+    if label == "Job description" and not content.strip():
+        raise MissingInputError("Job description is empty.")
+    return content
 
 
 def validate_latex(source: str) -> list[str]:
@@ -139,20 +148,36 @@ def validate_latex(source: str) -> list[str]:
     if not any(marker in source for marker in latex_markers):
         raise InvalidLatexError("Input resume does not contain recognizable LaTeX resume markers.")
 
-    depth = 0
+    brace_depth = 0
     for index, character in enumerate(source):
         previous = source[index - 1] if index > 0 else ""
         if character == "{" and previous != "\\":
-            depth += 1
+            brace_depth += 1
         elif character == "}" and previous != "\\":
-            depth -= 1
-        if depth < 0:
+            brace_depth -= 1
+        if brace_depth < 0:
             raise InvalidLatexError("Input resume has unbalanced braces.")
 
-    if depth != 0:
+    if brace_depth != 0:
         raise InvalidLatexError("Input resume has unbalanced braces.")
-    if "\\begin{document}" in source and "\\end{document}" not in source:
-        warnings.append("Resume starts a document but does not contain \\end{document}.")
+
+    environments = re.findall(r"\\(begin|end)\{([^{}]+)\}", source)
+    environment_stack: list[str] = []
+    for command, environment in environments:
+        if command == "begin":
+            environment_stack.append(environment)
+            continue
+        if not environment_stack:
+            raise InvalidLatexError(f"Input resume closes LaTeX environment '{environment}' before it is opened.")
+        opened = environment_stack.pop()
+        if opened != environment:
+            raise InvalidLatexError(
+                f"Input resume closes LaTeX environment '{environment}' before closing '{opened}'."
+            )
+
+    if environment_stack:
+        unclosed = ", ".join(environment_stack)
+        raise InvalidLatexError(f"Input resume has unclosed LaTeX environment(s): {unclosed}.")
     return warnings
 
 
@@ -205,6 +230,7 @@ def build_report(resume_source: str, job_description: str, warnings: Sequence[st
         "missingKeywords": missing_keywords,
         "sectionsChanged": [],
         "warnings": list(warnings),
+        "errors": [],
         "unsupportedClaimsRejected": [],
     }
 
@@ -218,20 +244,53 @@ def write_failure_report(report_path: Path, message: str) -> None:
         "matchedKeywords": [],
         "missingKeywords": [],
         "sectionsChanged": [],
-        "warnings": [message],
+        "warnings": [],
+        "errors": [message],
         "unsupportedClaimsRejected": [],
     }
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
+def assert_safe_output_path(input_path: Path, output_path: Path) -> None:
+    try:
+        same_path = input_path.resolve(strict=False) == output_path.resolve(strict=False)
+    except OSError:
+        same_path = input_path.absolute() == output_path.absolute()
+    if same_path:
+        raise UnsafeOutputError("Output path must not match the input resume path.")
+
+
+def write_output_atomically(output_path: Path, content: str) -> None:
+    if not content:
+        raise InvalidLatexError("Refusing to write an empty tailored resume.")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as temp_file:
+        temp_path = Path(temp_file.name)
+        temp_file.write(content)
+
+    try:
+        temp_path.replace(output_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 def run_tailoring(inputs: TailoringInputs) -> dict[str, object]:
+    assert_safe_output_path(inputs.input_path, inputs.output_path)
     resume_source = read_required_text(inputs.input_path, "Input resume")
     job_description = read_required_text(inputs.job_description_path, "Job description")
     warnings = validate_latex(resume_source)
 
-    inputs.output_path.parent.mkdir(parents=True, exist_ok=True)
     inputs.report_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(inputs.input_path, inputs.output_path)
+    write_output_atomically(inputs.output_path, resume_source)
 
     report = build_report(resume_source, job_description, warnings)
     inputs.report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
