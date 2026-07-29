@@ -272,6 +272,14 @@ type BackendApplicationDraft = {
   notes: string;
   resumeUsed: string;
 };
+type BackendTailoringJobState = {
+  resumeVersionId?: string;
+  status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+  message: string;
+  error?: string;
+  isStarting?: boolean;
+  fileName?: string;
+};
 
 const projectStorageKey = "tailortex.savedProject.v1";
 const tailoringSessionsStorageKey = "tailortex.namedSessions.v1";
@@ -1140,6 +1148,7 @@ export default function TailorTexApp() {
     message: string;
   }>({ state: "idle", message: "" });
   const [backendStatusFilter, setBackendStatusFilter] = useState<ApplicationStatus | "all">("all");
+  const [backendTailoringJobs, setBackendTailoringJobs] = useState<Record<string, BackendTailoringJobState>>({});
   const [autofillProfile, setAutofillProfile] = useState<AutofillProfile>(defaultAutofillProfile);
   const [autofillProfileReady, setAutofillProfileReady] = useState(false);
   const [copiedAnswerId, setCopiedAnswerId] = useState<string | null>(null);
@@ -1161,6 +1170,7 @@ export default function TailorTexApp() {
   });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const workspacePreviewRef = useRef<HTMLDivElement | null>(null);
+  const backendTailoringInFlightRef = useRef<Set<string>>(new Set());
 
   const activeFile = files.find((file) => file.name === activeFileName) ?? files[0];
   const primaryEditorFiles = useMemo(() => {
@@ -1952,6 +1962,61 @@ export default function TailorTexApp() {
     if (!isBackendMode()) return;
     void loadBackendApplications(backendStatusFilter);
   }, [backendStatusFilter, loadBackendApplications]);
+
+  useEffect(() => {
+    if (!isBackendMode()) return;
+    const activeJobs = Object.entries(backendTailoringJobs).filter(([, jobState]) => {
+      return jobState.resumeVersionId && (jobState.status === "PENDING" || jobState.status === "PROCESSING");
+    });
+    if (activeJobs.length === 0) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      await Promise.all(
+        activeJobs.map(async ([applicationId, jobState]) => {
+          if (!jobState.resumeVersionId) return;
+          try {
+            const version = await backendApi.getResumeVersion(jobState.resumeVersionId);
+            if (cancelled) return;
+            setBackendTailoringJobs((current) => ({
+              ...current,
+              [applicationId]: {
+                ...current[applicationId],
+                resumeVersionId: version.id,
+                status: version.processingStatus,
+                message:
+                  version.processingStatus === "COMPLETED"
+                    ? "Server tailoring completed. Load the generated resume when ready."
+                    : version.processingStatus === "FAILED"
+                      ? "Server tailoring failed."
+                      : "Server tailoring is processing...",
+                error: version.processingStatus === "FAILED"
+                  ? version.safeErrorMessage || version.failureMessage || "The server could not tailor this resume."
+                  : undefined
+              }
+            }));
+          } catch (error) {
+            if (cancelled) return;
+            setBackendTailoringJobs((current) => ({
+              ...current,
+              [applicationId]: {
+                ...current[applicationId],
+                message: "Could not refresh tailoring status.",
+                error: error instanceof Error ? error.message : "Status refresh failed."
+              }
+            }));
+          }
+        })
+      );
+    };
+    const intervalId = window.setInterval(() => void poll(), 3000);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [backendTailoringJobs]);
 
   useEffect(() => {
     if (!autofillProfileReady) return;
@@ -3654,6 +3719,84 @@ export default function TailorTexApp() {
     setCurrentSessionName(`${application.company} ${application.jobTitle}`.trim());
     setSelectedStep("upload");
     setProjectStorageStatus(`Opened ${application.company} ${application.jobTitle} in the resume studio.`);
+  }
+
+  async function startBackendTailoring(application: JobApplication, resumeFile: File) {
+    if (backendTailoringInFlightRef.current.has(application.id)) {
+      return;
+    }
+    const currentJobState = backendTailoringJobs[application.id];
+    if (currentJobState?.isStarting || currentJobState?.status === "PENDING" || currentJobState?.status === "PROCESSING") {
+      return;
+    }
+    backendTailoringInFlightRef.current.add(application.id);
+    setBackendTailoringJobs((current) => ({
+      ...current,
+      [application.id]: {
+        ...current[application.id],
+        isStarting: true,
+        fileName: resumeFile.name,
+        message: "Starting server tailoring..."
+      }
+    }));
+
+    try {
+      const version = await backendApi.requestTailoring(application.id, resumeFile, resumeFile.name);
+      setBackendTailoringJobs((current) => ({
+        ...current,
+        [application.id]: {
+          resumeVersionId: version.id,
+          status: version.processingStatus,
+          fileName: resumeFile.name,
+          isStarting: false,
+          message: version.processingStatus === "COMPLETED"
+            ? "Server tailoring completed."
+            : "Server tailoring job started."
+        }
+      }));
+    } catch (error) {
+      setBackendTailoringJobs((current) => ({
+        ...current,
+        [application.id]: {
+          ...current[application.id],
+          isStarting: false,
+          fileName: resumeFile.name,
+          message: "Could not start server tailoring.",
+          error: error instanceof Error ? error.message : "The server could not start tailoring."
+        }
+      }));
+    } finally {
+      backendTailoringInFlightRef.current.delete(application.id);
+    }
+  }
+
+  async function loadBackendTailoredResume(application: JobApplication, resumeVersionId: string) {
+    try {
+      const blob = await backendApi.downloadResumeVersion(resumeVersionId);
+      const tailoredTex = await blob.text();
+      const fileName = `${makeSafeFilename(application.company, application.jobTitle, "server-tailored")}.tex`;
+      const serverFile = createResumeSourceFile(fileName, tailoredTex);
+      setFiles([serverFile]);
+      setOriginalFiles([serverFile]);
+      setActiveFileName(fileName);
+      setManualChangeTags(["Server generated"]);
+      setPreviewPdf(null);
+      setOriginalPreviewPdf(null);
+      setPdfFitStatus({ state: "unknown" });
+      setCompileJumpTarget(null);
+      setCompileErrorDetails(null);
+      setSelectedStep("upload");
+      setProjectStorageStatus(`Loaded server-generated tailored resume for ${application.company} ${application.jobTitle}.`);
+    } catch (error) {
+      setBackendTailoringJobs((current) => ({
+        ...current,
+        [application.id]: {
+          ...current[application.id],
+          message: "Could not load the completed server resume.",
+          error: error instanceof Error ? error.message : "The generated resume could not be downloaded."
+        }
+      }));
+    }
   }
 
   function loadApplicationResume(record: ApplicationRecord) {
@@ -5432,10 +5575,18 @@ export default function TailorTexApp() {
                     jobDescription: job.description,
                     resumeUsed: resumeVersionName
                   }}
+                  currentResumeFile={{
+                    name: parsedResume.filename || activeFileName || "resume.tex",
+                    content: source
+                  }}
+                  localMatchScore={matchAnalysis.score}
+                  tailoringJobs={backendTailoringJobs}
                   onStatusFilterChange={setBackendStatusFilter}
                   onRefresh={() => void loadBackendApplications()}
                   onSave={(draft, id) => void saveBackendApplication(draft, id)}
                   onOpen={openBackendApplicationInStudio}
+                  onStartTailoring={(application, resumeFile) => void startBackendTailoring(application, resumeFile)}
+                  onLoadTailoredResume={(application, resumeVersionId) => void loadBackendTailoredResume(application, resumeVersionId)}
                 />
               ) : (
                 <ApplicationTrackerPanel
@@ -7010,10 +7161,15 @@ function BackendApplicationTrackerPanel({
   status,
   statusFilter,
   currentJob,
+  currentResumeFile,
+  localMatchScore,
+  tailoringJobs,
   onStatusFilterChange,
   onRefresh,
   onSave,
-  onOpen
+  onOpen,
+  onStartTailoring,
+  onLoadTailoredResume
 }: {
   applications: JobApplication[];
   status: { state: "idle" | "loading" | "saving" | "error"; message: string };
@@ -7025,13 +7181,19 @@ function BackendApplicationTrackerPanel({
     jobDescription: string;
     resumeUsed: string;
   };
+  currentResumeFile: { name: string; content: string };
+  localMatchScore: number;
+  tailoringJobs: Record<string, BackendTailoringJobState>;
   onStatusFilterChange: (status: ApplicationStatus | "all") => void;
   onRefresh: () => void;
   onSave: (draft: BackendApplicationDraft, id?: string) => void;
   onOpen: (application: JobApplication) => void;
+  onStartTailoring: (application: JobApplication, resumeFile: File) => void;
+  onLoadTailoredResume: (application: JobApplication, resumeVersionId: string) => void;
 }) {
   const [editingId, setEditingId] = useState<string | undefined>();
   const [draft, setDraft] = useState<BackendApplicationDraft>(() => emptyBackendApplicationDraft(currentJob));
+  const [selectedResumeFiles, setSelectedResumeFiles] = useState<Record<string, File | undefined>>({});
   const isSaving = status.state === "saving";
 
   function updateDraft(field: keyof BackendApplicationDraft, value: string) {
@@ -7046,6 +7208,14 @@ function BackendApplicationTrackerPanel({
   function startEdit(application: JobApplication) {
     setEditingId(application.id);
     setDraft(draftFromApplication(application));
+  }
+
+  function startTailoringWithSelectedResume(application: JobApplication) {
+    const selectedFile = selectedResumeFiles[application.id];
+    const resumeFile = selectedFile ?? new File([currentResumeFile.content], currentResumeFile.name || "resume.tex", {
+      type: "application/x-tex"
+    });
+    onStartTailoring(application, resumeFile);
   }
 
   return (
@@ -7141,7 +7311,11 @@ function BackendApplicationTrackerPanel({
         </div>
         <div className="grid gap-3 p-4">
           {applications.length > 0 ? (
-            applications.map((application) => (
+            applications.map((application) => {
+              const tailoringJob = tailoringJobs[application.id];
+              const isProcessing = tailoringJob?.isStarting || tailoringJob?.status === "PENDING" || tailoringJob?.status === "PROCESSING";
+              const selectedResumeFile = selectedResumeFiles[application.id];
+              return (
               <article key={application.id} className="border border-rule bg-paper p-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -7170,8 +7344,62 @@ function BackendApplicationTrackerPanel({
                 {application.notes ? (
                   <p className="mt-3 border border-rule bg-white p-3 text-sm leading-6 text-ink/70">{application.notes}</p>
                 ) : null}
+                <div className="mt-3 border border-rule bg-white p-3">
+                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.7fr)]">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Local match analysis</p>
+                      <p className="mt-1 text-sm font-semibold text-ink">{localMatchScore}/100 immediate preview</p>
+                      <p className="mt-1 text-xs leading-5 text-ink/55">
+                        This score comes from the in-browser TailorTeX analysis. It is separate from the server-generated tailored resume.
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sage">Server-generated tailored resume</p>
+                      <p className="mt-1 text-sm font-semibold text-ink">
+                        {tailoringJob?.status ?? "No server job started"}
+                      </p>
+                      <p className={cx("mt-1 text-xs leading-5", tailoringJob?.error ? "text-coral" : "text-ink/55")}>
+                        {tailoringJob?.error || tailoringJob?.message || "Choose a base .tex resume, then start backend tailoring."}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+                    <label className="block text-sm font-semibold text-ink">
+                      <span className="mb-1 block">Base .tex resume</span>
+                      <input
+                        type="file"
+                        accept=".tex,application/x-tex,text/plain"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          setSelectedResumeFiles((current) => ({ ...current, [application.id]: file }));
+                        }}
+                        className="block w-full border border-rule bg-paper px-3 py-2 text-sm font-normal text-ink file:mr-3 file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+                      />
+                      <span className="mt-1 block text-xs font-normal text-ink/55">
+                        {selectedResumeFile?.name || `Using current studio source: ${currentResumeFile.name}`}
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => startTailoringWithSelectedResume(application)}
+                      disabled={Boolean(isProcessing)}
+                      className="self-end border border-sage bg-sage px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    >
+                      {isProcessing ? "Tailoring..." : "Start tailoring"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => tailoringJob?.resumeVersionId && onLoadTailoredResume(application, tailoringJob.resumeVersionId)}
+                      disabled={tailoringJob?.status !== "COMPLETED" || !tailoringJob.resumeVersionId}
+                      className="self-end border border-ink bg-white px-4 py-2 text-sm font-semibold text-ink disabled:opacity-50"
+                    >
+                      Load server resume
+                    </button>
+                  </div>
+                </div>
               </article>
-            ))
+            );
+            })
           ) : (
             <div className="border border-rule bg-paper p-4">
               <p className="text-sm font-semibold text-ink">No backend applications found.</p>
