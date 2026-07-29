@@ -5,7 +5,51 @@ dist
 *.log
 .env
 .env.local
+.env.*.local
+!.env.example
+!.env.*.example
 data/*.local.json
 data/resumes/
 data/packets/
 resume-project/private-*.tex
+
+# Python
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Java
+target/
+*.class
+
+# .NET
+bin/
+obj/
+TestResults/
+
+# Generated documents and local runtime files
+*.pdf
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.xdv
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+tmp/
+temp/
+uploads/
+uploaded-resumes/
