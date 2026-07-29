@@ -77,3 +77,57 @@ python3 tailor_resume.py \
 cd services/tailoring-python
 python3 -m unittest discover -s tests
 ```
+
+## HTTP Service
+
+The HTTP service uses Python standard library modules only.
+
+Run locally:
+
+```sh
+cd services/tailoring-python
+python3 tailoring_service.py --host 127.0.0.1 --port 8000
+```
+
+Health check:
+
+```sh
+curl http://127.0.0.1:8000/health
+```
+
+Tailor request:
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/tailor \
+  -F "resume=@tests/fixtures/resume.tex" \
+  -F "jobDescription=$(cat tests/fixtures/job-description.txt)" \
+  -F "evidence=$(cat tests/fixtures/evidence.json)"
+```
+
+Response shape:
+
+```json
+{
+  "report": {
+    "status": "COMPLETED"
+  },
+  "tailoredTex": "\\documentclass{article}\n..."
+}
+```
+
+The service rejects non-`.tex` uploads, oversized files, empty job descriptions, and invalid evidence JSON. It processes uploads in temporary directories and cleans them up after each request.
+
+## Docker
+
+Build the Python service image:
+
+```sh
+cd services/tailoring-python
+docker build -t tailortex-tailoring-python .
+```
+
+Run it:
+
+```sh
+docker run --rm -p 8000:8000 tailortex-tailoring-python
+```

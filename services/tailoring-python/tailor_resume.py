@@ -254,6 +254,26 @@ def load_evidence(evidence_path: Path | None) -> dict[str, list[str]]:
     return evidence
 
 
+def parse_evidence_json(evidence_json: str | None) -> dict[str, list[str]]:
+    categories = ("skills", "projects", "workExperience", "education", "certifications")
+    if evidence_json is None or not evidence_json.strip():
+        return {category: [] for category in categories}
+    try:
+        payload = json.loads(evidence_json)
+    except json.JSONDecodeError as error:
+        raise InvalidEvidenceError(f"Evidence JSON is not valid: {error.msg}.") from error
+    if not isinstance(payload, dict):
+        raise InvalidEvidenceError("Evidence JSON must contain an object.")
+
+    evidence: dict[str, list[str]] = {}
+    for category in categories:
+        value = payload.get(category, [])
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise InvalidEvidenceError(f"Evidence field '{category}' must be an array of strings.")
+        evidence[category] = value
+    return evidence
+
+
 def evidence_text(evidence: dict[str, list[str]]) -> str:
     return "\n".join(item for values in evidence.values() for item in values)
 
